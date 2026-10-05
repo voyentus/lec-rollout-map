@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>LEC Rollout Coverage</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="gate" id="gate">
+  <form class="gatecard" id="signin" hidden>
+    <h1>LEC Rollout Coverage</h1>
+    <p class="tag">Sign in to open the map</p>
+    <label>Email <input type="email" name="email" autocomplete="username" required></label>
+    <label>Password <input type="password" name="password" autocomplete="current-password" required></label>
+    <button class="primary" type="submit">Sign in</button>
+    <p class="msg" id="gatemsg" role="alert"></p>
+  </form>
+  <div class="gatecard" id="loading">
+    <h1>LEC Rollout Coverage</h1>
+    <p class="loadmsg" id="loadmsg" role="status">Starting…</p>
+    <div class="loadbar"><i></i></div>
+    <div class="loadactions">
+      <button class="ghost" id="loadretry" type="button">Try again</button>
+      <button class="ghost" id="loadsignout" type="button">Sign out</button>
+    </div>
+  </div>
+</div>
+
+<div class="app" id="app" hidden>
+  <div class="topbar">
+    <div class="brand">
+      <h1>LEC Rollout Coverage</h1>
+      <span class="tag">LECMS meters &times; GSMA coverage</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="seg" id="basemaps" role="group" aria-label="Basemap"></div>
+    <button class="iconbtn" id="infobtn" title="Coverage findings" aria-label="Coverage findings" aria-controls="brief" aria-expanded="false">
+      <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
+        <circle cx="8" cy="8" r="6.4" fill="none" stroke="currentColor" stroke-width="1.4"/>
+        <circle cx="8" cy="4.6" r="0.95" fill="currentColor"/>
+        <path d="M8 6.9v4.7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      <span>Findings</span>
+    </button>
+    <button class="iconbtn" id="themebtn" title="Toggle light / dark" aria-label="Toggle light or dark theme"><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 1.8a6.2 6.2 0 0 0 0 12.4z" fill="currentColor"/></svg></button>
+    <span class="whoami" id="whoami"></span>
+    <button class="iconbtn" id="signout" type="button">Sign out</button>
+  </div>
+
+  <div class="body">
+    <aside class="rail">
+      <div class="sect">
+        <h2>Rollout <span id="asof"></span></h2>
+        <div class="kpis" id="kpis"></div>
+      </div>
+
+      <div class="sect">
+        <h2>Show meters</h2>
+        <div class="views" id="views"></div>
+        <div class="swatchrow" id="meterkey"></div>
+      </div>
+
+      <div class="sect">
+        <h2>Gateway layers</h2>
+        <div id="gwsync"></div>
+        <div id="gwbody">
+          <div id="gwlayers"></div>
+          <div class="stack">
+            <div class="jump">
+              <input id="gwnewname" placeholder="New layer name" aria-label="New layer name" style="font-family:inherit">
+              <button id="gwadd" type="button">Add layer</button>
+            </div>
+            <button class="ghost" id="gwexport" type="button">Download gateways (CSV)</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="sect">
+        <h2>Network assets</h2>
+        <div class="layers" id="assetctl"></div>
+      </div>
+
+      <div class="sect">
+        <h2>Coverage layers</h2>
+        <div id="controls"></div>
+      </div>
+
+      <div class="sect">
+        <h2>Fill opacity</h2>
+        <div class="slider">
+          <input type="range" id="opacity" min="5" max="90" value="24" aria-label="Fill opacity">
+          <output id="opacityval">24%</output>
+        </div>
+      </div>
+
+      <div class="sect">
+        <h2>Coverage at a point</h2>
+        <div class="probe" id="probe">
+          <p class="hint">Click the map to test a location against every loaded layer.</p>
+        </div>
+      </div>
+
+      <div class="sect">
+        <h2>Go to</h2>
+        <div class="stack">
+          <div class="jump">
+            <input id="coordin" placeholder="6.3106, -10.8047" aria-label="Latitude, longitude">
+            <button id="gobtn" type="button">Go</button>
+          </div>
+          <div class="seg" id="places" style="flex-wrap:wrap"></div>
+        </div>
+      </div>
+
+      <div class="sect">
+        <h2>Export</h2>
+        <div class="stack">
+          <button class="ghost" id="dlvisible" type="button">Download visible coverage (GeoJSON)</button>
+          <button class="ghost" id="dlmeters" type="button">Download meters in current view (CSV)</button>
+          <button class="ghost" id="fitbtn" type="button">Reset view to rollout area</button>
+        </div>
+      </div>
+    </aside>
+
+    <div class="mapwrap">
+      <div id="map"></div>
+
+      <aside class="brief" id="brief" hidden aria-labelledby="brieftitle">
+        <div class="briefhead">
+          <h2 id="brieftitle">What the coverage data says</h2>
+          <button class="briefclose" id="briefclose" type="button" title="Minimise to header" aria-label="Minimise to header">
+            <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 12h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <div class="briefbody"></div>
+      </aside>
+    </div>
+  </div>
+
+  <div class="statusbar">
+    <span>CURSOR <span class="v" id="stcursor">—</span></span>
+    <span>ZOOM <span class="v" id="stzoom">7</span></span>
+    <span>COVERAGE <span class="v" id="stvis">6 of 6</span></span>
+    <span>METERS <span class="v" id="stmeters">—</span></span>
+    <span class="push" id="stsource"></span>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
