@@ -54,10 +54,10 @@ async function loadData(sb){
   const [hh, tr, cov, meta] = await Promise.all([
     q(sb.rpc('households_packed')),
     q(sb.from('transformers').select('code,idx,name,feeder,lat,lng').order('idx')),
-    q(sb.from('coverage_layers').select('key,properties,geometry')),
+    q(sb.storage.from('app-data').download('coverage.json')).then(blob => blob.text()).then(JSON.parse),
     q(sb.from('app_meta').select('key,value'))
   ]);
-  if (!hh || !hh.n || !tr.length || !cov.length)
+  if (!hh || !hh.n || !tr.length || !cov.features || !cov.features.length)
     throw new Error('The map data has not been loaded into the database yet.');
   const m = {};
   meta.forEach(r => { m[r.key] = r.value; });
@@ -71,11 +71,7 @@ async function loadData(sb){
     t.n++; if (status[i]) t.ex++; if (!(flags[i] & 18)) t.no3g++;
   }
   return {
-    COVERAGE: {
-      type: 'FeatureCollection', name: m.coverage_name || 'Mobile coverage',
-      crs: { type: 'name', properties: { name: 'urn:ogc:def:crs:OGC:1.3:CRS84' } },
-      features: cov.map(r => ({ type: 'Feature', properties: r.properties, geometry: r.geometry }))
-    },
+    COVERAGE: cov,
     METERS: {
       lat0: hh.lat0, lng0: hh.lng0, n: n, id: hh.id,
       lat: Uint32Array.from(hh.lat), lng: Uint32Array.from(hh.lng),
