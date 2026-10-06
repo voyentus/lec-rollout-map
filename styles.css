@@ -79,11 +79,16 @@ button{font:inherit;color:inherit}
   display:flex;align-items:center;gap:8px;padding:0 0 7px;border-bottom:1px solid var(--line);margin-bottom:6px;
 }
 .ophead .nm{font-weight:600;font-size:13px;flex:1;min-width:0}
-.ophead .allbtn{
+.allbtn{
   border:0;background:none;cursor:pointer;font-family:"IBM Plex Mono",monospace;
   font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);padding:2px 4px;
 }
-.ophead .allbtn:hover{color:var(--accent)}
+.allbtn:hover{color:var(--accent)}
+.fdr{position:relative}
+.fdr .lyr{grid-template-columns:16px 1fr;align-items:start}
+.fdr .sw{margin-top:1px}
+.fdr .lname em{display:block;margin:2px 0 0;font-family:inherit;font-size:11.5px}
+.fdr .allbtn{position:absolute;top:6px;right:4px}
 .lyr{
   display:grid;grid-template-columns:16px 1fr auto;align-items:center;gap:10px;
   width:100%;padding:7px 8px;border:0;background:none;cursor:pointer;border-radius:3px;text-align:left;

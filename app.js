@@ -423,10 +423,37 @@ const latOf = i => METERS.lat0 + M.lat[i] / 1e6;
 const lngOf = i => METERS.lng0 + M.lng[i] / 1e6;
 const BIT = { orGsm: 1, or3g: 2, orLte: 4, lsGsm: 8, ls3g: 16, lsLte: 32 };
 
+/* ---- feeders ----
+   The number in front of the transformer part of a code is its feeder:
+   PAYN-SUB-22KV-02-TRN86 is on feeder 02. Every household belongs to
+   its transformer's feeder. */
+const FEEDER_COLORS = ['#2A78D6', '#D55181', '#008300', '#4A3AA7', '#EDA100', '#1BAF7A'];
+const NO_FEEDER_COLOR = '#7B8A8E';
+const feederNo = t => {
+  const m = /-(\d+)-[A-Z]+\d+$/.exec(t.code || '') || /-(\d+)$/.exec(t.feeder || '');
+  return m ? m[1] : '';
+};
+const feederNos = [...new Set(METERS.transformers.map(feederNo))].sort((a, b) => (a === '') - (b === '') || a - b);
+const feedersOff = store.get('feedersOff', []);
+const FEEDERS = feederNos.map((no, k) => ({
+  no: no, name: no ? 'Feeder ' + no : 'No feeder in code', full: '',
+  color: no && FEEDER_COLORS[k] || NO_FEEDER_COLOR,
+  tr: 0, hh: 0, on: feedersOff.indexOf(no) === -1, group: L.layerGroup()
+}));
+const trFeeder = METERS.transformers.map(t => {
+  const k = feederNos.indexOf(feederNo(t)), f = FEEDERS[k];
+  f.tr++; f.hh += t.n; if (!f.full) f.full = t.feeder || '';
+  return k;
+});
+const hhFeeder = Uint8Array.from(M.tidx, v => trFeeder[v]);
+
 const VIEWS = [
   { id: 'all',    name: 'All households',            desc: 'existing meter vs not yet metered',
     test: () => true,
     color: i => M.status[i] ? '#2A8DA8' : '#8FA3A8' },
+  { id: 'feeder', name: 'By feeder',                 desc: 'coloured by the feeder each household is on',
+    test: () => true,
+    color: i => FEEDERS[hhFeeder[i]].color },
   { id: 'no3g',   name: 'No 3G from either operator', desc: 'outside both 3G footprints',
     test: i => !(M.flags[i] & (BIT.or3g | BIT.ls3g)), color: () => '#C2410C' },
   { id: 'nolsl',  name: 'Outside Lonestar LTE',       desc: 'Orange LTE only',
@@ -439,13 +466,17 @@ const VIEWS = [
   { id: 'none',   name: 'Hide meters',                desc: '',
     test: () => false, color: () => '#000' }
 ];
+/* counts and the drawn points only include feeders that are switched on */
 const viewCount = {};
-VIEWS.forEach(v => { let c = 0; for (let i = 0; i < M.n; i++) if (v.test(i)) c++; viewCount[v.id] = c; });
-let activeView = VIEWS.find(v => v.id === store.get('view', 'no3g')) || VIEWS[1];
+function countViews(){
+  VIEWS.forEach(v => { let c = 0; for (let i = 0; i < M.n; i++) if (FEEDERS[hhFeeder[i]].on && v.test(i)) c++; viewCount[v.id] = c; });
+}
+countViews();
+let activeView = VIEWS.find(v => v.id === store.get('view', 'no3g')) || VIEWS[2];
 let visibleIdx = [];
 function rebuildIndex(){
   visibleIdx = [];
-  for (let i = 0; i < M.n; i++) if (activeView.test(i)) visibleIdx.push(i);
+  for (let i = 0; i < M.n; i++) if (FEEDERS[hhFeeder[i]].on && activeView.test(i)) visibleIdx.push(i);
   document.getElementById('stmeters').textContent =
     activeView.id === 'none' ? 'hidden' : visibleIdx.length.toLocaleString('en-GB') + ' shown';
 }
@@ -507,8 +538,7 @@ VIEWS.forEach(v => {
   b.className = 'vw'; b.type = 'button';
   b.setAttribute('aria-pressed', String(v.id === activeView.id));
   b.title = v.desc;
-  b.innerHTML = '<span class="rd"></span><span class="vn">' + v.name + '</span>' +
-                '<span class="vc">' + (v.id === 'none' ? '' : viewCount[v.id].toLocaleString('en-GB')) + '</span>';
+  b.innerHTML = '<span class="rd"></span><span class="vn">' + v.name + '</span><span class="vc"></span>';
   b.onclick = () => {
     activeView = v; store.set('view', v.id);
     [...viewsEl.children].forEach((el, k) => el.setAttribute('aria-pressed', String(VIEWS[k].id === v.id)));
@@ -516,10 +546,18 @@ VIEWS.forEach(v => {
   };
   viewsEl.appendChild(b);
 });
+function paintViewCounts(){
+  [...viewsEl.children].forEach((el, k) => {
+    el.querySelector('.vc').textContent = VIEWS[k].id === 'none' ? '' : viewCount[VIEWS[k].id].toLocaleString('en-GB');
+  });
+}
+paintViewCounts();
 function renderKey(){
   const k = document.getElementById('meterkey');
   if (activeView.id === 'all')
     k.innerHTML = '<span><i style="background:#2A8DA8"></i>existing meter</span><span><i style="background:#8FA3A8"></i>not yet metered</span>';
+  else if (activeView.id === 'feeder')
+    k.innerHTML = FEEDERS.filter(f => f.on).map(f => '<span><i style="background:' + f.color + '"></i>' + f.name + '</span>').join('');
   else if (activeView.id === 'onelte')
     k.innerHTML = '<span><i style="background:#E9761C"></i>Orange LTE only</span><span><i style="background:#7A3BAF"></i>Lonestar LTE only</span>';
   else if (activeView.id === 'none') k.innerHTML = '';
@@ -528,7 +566,7 @@ function renderKey(){
 renderKey();
 
 /* ---- KPIs ---- */
-let noneCovered3g = viewCount.no3g;
+let noneCovered3g = METERS.transformers.reduce((s, t) => s + t.no3g, 0);
 document.getElementById('kpis').innerHTML =
   '<div class="kpi"><div class="n">' + M.n.toLocaleString('en-GB') + '</div><div class="l">Households</div></div>' +
   '<div class="kpi"><div class="n">' + METERS.transformers.length + '</div><div class="l">Transformers</div></div>' +
@@ -539,19 +577,20 @@ document.getElementById('asof').textContent =
 
 /* ---- transformers and substation ---- */
 const trLayer = L.layerGroup();
-METERS.transformers.forEach(t => {
+METERS.transformers.forEach((t, k) => {
   const share = t.n ? t.no3g / t.n : 0;
-  const col = share > 0.5 ? '#C2410C' : share > 0.05 ? '#D98324' : '#0A5A70';
+  const f = FEEDERS[trFeeder[k]];
   L.circleMarker([t.lat, t.lng], {
     radius: Math.max(4, Math.min(16, Math.sqrt(t.n) * 0.75)),
-    color: col, weight: 1.6, fillColor: col, fillOpacity: 0.2
+    color: f.color, weight: 1.8, fillColor: f.color, fillOpacity: 0.3
   }).bindPopup(
     '<b>' + (t.name || t.code) + '</b><br>' + t.code +
-    (t.feeder ? '<br>Feeder ' + t.feeder : '') +
+    '<br>' + f.name + (t.feeder ? ' &middot; ' + t.feeder : '') +
     '<br>' + t.n + ' households, ' + t.ex + ' metered' +
     '<br>' + t.no3g + ' with no 3G (' + Math.round(share * 100) + '%)'
-  ).addTo(trLayer);
+  ).addTo(f.group);
 });
+FEEDERS.forEach(f => { if (f.on) trLayer.addLayer(f.group); });
 const subLayer = L.layerGroup();
 L.circleMarker([METERS.substation.lat, METERS.substation.lng], {
   radius: 9, color: '#0E1719', weight: 2.5, fillColor: '#FFD43B', fillOpacity: 1
@@ -576,6 +615,48 @@ const assetCtl = document.getElementById('assetctl');
   };
   assetCtl.appendChild(b);
 });
+
+/* ---- feeders: show, hide or isolate each one ---- */
+const fdEl = document.getElementById('feeders'), fdAll = document.getElementById('fdall');
+function paintFeeders(){
+  const on = FEEDERS.filter(f => f.on);
+  FEEDERS.forEach(f => {
+    const alone = on.length === 1 && f.on;
+    f.btn.setAttribute('aria-pressed', String(f.on));
+    f.solo.textContent = alone ? 'all' : 'only';
+    f.solo.title = alone ? 'Show every feeder' : 'Show only ' + f.name;
+  });
+  fdAll.hidden = on.length === FEEDERS.length;
+}
+function setFeeders(pick){
+  const next = FEEDERS.map(pick);
+  FEEDERS.forEach((f, k) => {
+    f.on = next[k];
+    if (f.on) trLayer.addLayer(f.group); else trLayer.removeLayer(f.group);
+  });
+  store.set('feedersOff', FEEDERS.filter(f => !f.on).map(f => f.no));
+  countViews(); paintViewCounts(); rebuildIndex(); meterCanvas._schedule(); renderKey(); paintFeeders();
+}
+FEEDERS.forEach(f => {
+  const row = document.createElement('div');
+  row.className = 'fdr';
+  f.btn = document.createElement('button');
+  f.btn.className = 'lyr'; f.btn.type = 'button'; f.btn.title = f.full;
+  f.btn.innerHTML = '<span class="sw" style="background:' + f.color + ';border-color:' + f.color + '"></span>' +
+    '<span class="lname">' + f.name + '<em>' + fmt(f.tr) + ' transformer' + (f.tr === 1 ? '' : 's') +
+    ' &middot; ' + fmt(f.hh) + ' household' + (f.hh === 1 ? '' : 's') + '</em></span>';
+  f.btn.onclick = () => setFeeders(x => x === f ? !x.on : x.on);
+  f.solo = document.createElement('button');
+  f.solo.className = 'allbtn'; f.solo.type = 'button';
+  f.solo.onclick = () => {
+    const alone = FEEDERS.every(x => x.on === (x === f));
+    setFeeders(x => alone || x === f);
+  };
+  row.append(f.btn, f.solo);
+  fdEl.appendChild(row);
+});
+fdAll.onclick = () => setFeeders(() => true);
+paintFeeders();
 
 /* ---- gateway planning layers ----
    User-named layers of gateway points. Each gateway has a radius and
