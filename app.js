@@ -108,7 +108,7 @@ $('signout').onclick = async () => {
 $('stsource').textContent = 'LECMS ' + METERS.n.toLocaleString('en-GB') + ' households · GSMA z7 · Orange 2017 · Lonestar 2018';
 
 /* ---------------------------------------------------------------
-   Map, coverage layers and point probe
+   Map and coverage layers
    Data: GSMA / Collins Bartholomew operator submissions, decoded
    from the Mapbox vector tilesets behind gsma.com/coverage.
 ----------------------------------------------------------------*/
@@ -131,11 +131,7 @@ const BASEMAPS = [
   ['Streets', 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors', 19],
   ['Humanitarian', 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
-   '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, tiles by HOT', 19],
-  ['Muted', 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
-   '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; CARTO', 19],
-  ['Dark', 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-   '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; CARTO', 19]
+   '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, tiles by HOT', 19]
 ];
 
 /* ---- geometry helpers ---- */
@@ -181,7 +177,7 @@ function covers(geom, lng, lat){
 const fmt = n => Math.round(n).toLocaleString('en-GB');
 
 /* ---- map ---- */
-const map = L.map('map', { zoomControl: true, attributionControl: true, minZoom: 5 })
+const map = L.map('map', { zoomControl: true, attributionControl: true, minZoom: 5, zoomSnap: 0.5, zoomDelta: 0.5 })
              .setView([6.45, -9.4], 7);
 L.control.scale({ imperial: false }).addTo(map);
 
@@ -201,7 +197,165 @@ BASEMAPS.forEach((b, i) => {
   btn.onclick = () => setBasemap(i);
   segBase.appendChild(btn);
 });
-setBasemap(store.get('basemap', 0));
+setBasemap(BASEMAPS[store.get('basemap', 0)] ? store.get('basemap', 0) : 0);
+
+/* ---- terrain ----
+   Ground height from the open Terrain Tiles set (SRTM, roughly a 30 m
+   grid), decoded in the browser. Hills are drawn as shaded relief that
+   darkens with height. The scale stretches to the land in view, so low
+   hills still stand out in flat country. */
+const DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/';
+const DEM_Z = 13;
+const demZoom = () => Math.min(DEM_Z, Math.round(map.getZoom()));   /* the tile level on screen */
+const demCache = new Map();
+function loadDem(z, x, y){
+  const key = z + '/' + x + '/' + y;
+  let p = demCache.get(key);
+  if (p) return p;
+  p = new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = c.height = 256;
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.drawImage(img, 0, 0);
+      const px = g.getImageData(0, 0, 256, 256).data, h = new Float32Array(65536);
+      for (let i = 0; i < 65536; i++) h[i] = px[i * 4] * 256 + px[i * 4 + 1] + px[i * 4 + 2] / 256 - 32768;
+      p.h = h;
+      resolve(h);
+    };
+    img.onerror = () => { demCache.delete(key); reject(new Error('No elevation tile')); };
+    img.src = DEM_URL + key + '.png';
+  });
+  demCache.set(key, p);
+  if (demCache.size > 80) demCache.delete(demCache.keys().next().value);
+  return p;
+}
+const demPixel = (latlng, z) => {
+  const p = map.project(latlng, z), x = Math.floor(p.x / 256), y = Math.floor(p.y / 256);
+  return { x: x, y: y, i: Math.floor(p.y - y * 256) * 256 + Math.floor(p.x - x * 256) };
+};
+/* metres above sea level at a point, from the tiles already on screen */
+function heightPeek(latlng){
+  const z = demZoom(), t = demPixel(latlng, z), tile = demCache.get(z + '/' + t.x + '/' + t.y);
+  return tile && tile.h ? tile.h[t.i] : null;
+}
+
+let demLo = 0, demHi = 40;
+const reliefTiles = new Set();
+/* the surface used for shading, softened: SRTM picks up roofs and tree tops as speckle */
+function smoothDem(h){
+  const a = new Float32Array(65536), b = new Float32Array(65536);
+  for (let i = 0; i < 65536; i++) a[i] = h[i] > 0 ? h[i] : 0;
+  for (let pass = 0; pass < 2; pass++){
+    for (let y = 0, i = 0; y < 256; y++) for (let x = 0; x < 256; x++, i++){
+      let s = 0;
+      for (let k = -2; k <= 2; k++) s += a[i - x + Math.max(0, Math.min(255, x + k))];
+      b[i] = s / 5;
+    }
+    for (let y = 0, i = 0; y < 256; y++) for (let x = 0; x < 256; x++, i++){
+      let s = 0;
+      for (let k = -2; k <= 2; k++) s += b[Math.max(0, Math.min(255, y + k)) * 256 + x];
+      a[i] = s / 5;
+    }
+  }
+  return a;
+}
+function paintRelief(tile){
+  const h = tile.dem, c = tile.coords;
+  if (!h) return;
+  const s = tile.smooth || (tile.smooth = smoothDem(h));
+  const g = tile.getContext('2d'), img = g.createImageData(256, 256), d = img.data;
+  const lat = map.unproject([c.x * 256 + 128, c.y * 256 + 128], c.z).lat;
+  const res = 40075016.686 * Math.cos(lat * Math.PI / 180) / (256 * Math.pow(2, c.z));   /* metres per pixel */
+  const span = demHi - demLo, zf = Math.max(1, Math.min(5, 200 / span)) / res;           /* flatter view, stronger shading */
+  for (let y = 0, i = 0; y < 256; y++){
+    const up = y ? -256 : 0, dn = y < 255 ? 256 : 0;
+    for (let x = 0; x < 256; x++, i++){
+      const v = h[i];
+      if (v <= 0) continue;                                    /* sea stays clear */
+      const lf = x ? -1 : 0, rt = x < 255 ? 1 : 0;
+      const dx = (s[i + rt] - s[i + lf]) * zf / (rt - lf), dy = (s[i + dn] - s[i + up]) * zf / ((dn - up) / 256);
+      /* light from the north-west; 1 on flat ground */
+      const lit = (0.5 * dx + 0.5 * dy + 0.7071) / Math.sqrt(dx * dx + dy * dy + 1) / 0.7071;
+      const t = Math.max(0, Math.min(1, (v - demLo) / span));
+      /* blended as hard light: mid grey leaves the basemap as it is */
+      const k = (0.5 - 0.13 * t) * Math.max(0.55, Math.min(1.5, lit)) * 255, o = i * 4;
+      d[o] = k + 6 * t; d[o + 1] = k; d[o + 2] = k - 8 * t; d[o + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+}
+const Relief = L.GridLayer.extend({
+  createTile(coords, done){
+    const tile = L.DomUtil.create('canvas', 'leaflet-tile');
+    tile.width = tile.height = 256;
+    tile.coords = coords;
+    loadDem(coords.z, coords.x, coords.y).then(h => {
+      tile.dem = h; reliefTiles.add(tile);
+      paintRelief(tile); done(null, tile); fitRelief();
+    }, e => done(e, tile));
+    return tile;
+  }
+});
+map.createPane('terrain').style.zIndex = 250;
+const relief = new Relief({
+  pane: 'terrain', maxNativeZoom: DEM_Z,
+  attribution: 'Elevation: <a href="https://registry.opendata.aws/terrain-tiles/">Terrain Tiles</a> (SRTM)'
+});
+relief.on('tileunload', e => reliefTiles.delete(e.tile));
+
+/* stretch the shading to the land now in view, in round steps so small pans do not change it */
+let fitTimer = 0;
+function fitRelief(){ clearTimeout(fitTimer); fitTimer = setTimeout(refitRelief, 120); }
+function refitRelief(){
+  if (!map.hasLayer(relief)) return;
+  const b = map.getPixelBounds(), tz = demZoom(), s = Math.pow(2, tz - map.getZoom()), vals = [];
+  reliefTiles.forEach(tile => {
+    const c = tile.coords;
+    if (c.z !== tz) return;
+    const x0 = Math.max(0, Math.floor(b.min.x * s - c.x * 256)), x1 = Math.min(256, Math.ceil(b.max.x * s - c.x * 256));
+    const y0 = Math.max(0, Math.floor(b.min.y * s - c.y * 256)), y1 = Math.min(256, Math.ceil(b.max.y * s - c.y * 256));
+    const step = Math.max(1, Math.round(Math.max(x1 - x0, y1 - y0) / 64));
+    for (let y = y0; y < y1; y += step) for (let x = x0; x < x1; x += step){
+      const v = tile.dem[y * 256 + x];
+      if (v > 0) vals.push(v);
+    }
+  });
+  if (vals.length < 50) return;
+  vals.sort((p, q) => p - q);
+  const a = vals[Math.floor(0.02 * (vals.length - 1))], top = vals[Math.floor(0.98 * (vals.length - 1))];
+  const step = top - a < 60 ? 10 : top - a < 200 ? 25 : top - a < 800 ? 100 : 250;
+  const lo = Math.floor(a / step) * step, hi = Math.max(lo + 20, Math.ceil(top / step) * step);
+  if (lo === demLo && hi === demHi) return;
+  demLo = lo; demHi = hi;
+  reliefTiles.forEach(paintRelief);
+  paintReliefKey();
+}
+map.on('moveend', fitRelief);
+
+const terrainCtl = document.getElementById('terrainctl');
+terrainCtl.innerHTML =
+  '<button class="lyr" type="button" aria-pressed="false"><span class="sw" style="background:#8C857B;border-color:#8C857B"></span>' +
+  '<span class="lname">Hills and ground height</span><span class="lval"></span></button>' +
+  '<div class="reliefkey" hidden><span></span><i></i><span></span></div>' +
+  '<p class="hint" hidden>Darker means higher. The shading adjusts to the area in view. The height under the pointer shows in the bar at the bottom.</p>';
+const terrainBtn = terrainCtl.querySelector('button');
+function paintReliefKey(){
+  const k = terrainCtl.querySelectorAll('.reliefkey span');
+  k[0].textContent = demLo + ' m'; k[1].textContent = demHi + ' m';
+}
+function setTerrain(on){
+  terrainBtn.setAttribute('aria-pressed', String(on));
+  terrainCtl.querySelector('.reliefkey').hidden = !on;
+  terrainCtl.querySelector('.hint').hidden = !on;
+  if (on) relief.addTo(map); else map.removeLayer(relief);
+  store.set('terrain', on);
+}
+terrainBtn.onclick = () => setTerrain(terrainBtn.getAttribute('aria-pressed') !== 'true');
+paintReliefKey();
+setTerrain(store.get('terrain', false));
 
 /* ---- coverage layers ---- */
 const entries = [];
@@ -292,7 +446,6 @@ function syncAll(){
     b.textContent = ops[op].some(e => e.on) ? 'hide all' : 'show all';
   });
   store.set('layers', on.map(e => e.key));
-  refreshProbe();
 }
 
 /* ---- opacity ---- */
@@ -307,48 +460,18 @@ opInput.value = store.get('opacity', 24);
 opInput.addEventListener('input', () => applyOpacity(+opInput.value));
 applyOpacity(+opInput.value);
 
-/* ---- point probe ---- */
-const probeEl = document.getElementById('probe');
-let probePoint = null, probeMarker = null;
-
-function refreshProbe(){
-  if (!probePoint){
-    probeEl.innerHTML = '<p class="hint">Click the map to test a location against every loaded layer.</p>';
-    return;
-  }
-  const lat = probePoint.lat, lng = probePoint.lng;
-  const rows = entries.map(e => {
-    const hit = covers(e.feature.geometry, lng, lat);
-    return '<li><span class="dot" style="background:' + (hit ? e.style.c : 'transparent') +
-           ';border:1.5px solid ' + (hit ? e.style.c : 'var(--line-2)') + '"></span>' +
-           '<span' + (hit ? '' : ' class="no"') + '>' +
-           e.feature.properties.operator_full.replace(' Liberia', '') + ' ' + e.style.label +
-           (hit ? '' : ' — no coverage') + '</span></li>';
-  }).join('');
-  const anyHit = entries.some(e => covers(e.feature.geometry, lng, lat));
-  probeEl.innerHTML =
-    '<p class="coord">' + lat.toFixed(5) + ', ' + lng.toFixed(5) + '</p>' +
-    (anyHit ? '<ul>' + rows + '</ul>'
-            : '<p class="none">No submitted coverage from either operator at this point.</p><ul>' + rows + '</ul>');
-}
-
-function setProbe(latlng){
-  probePoint = latlng;
-  if (probeMarker) map.removeLayer(probeMarker);
-  probeMarker = L.circleMarker(latlng, {
-    radius: 5, color: 'var(--ink)', weight: 2, fillColor: '#fff', fillOpacity: 1, className: 'probe-pin'
-  }).addTo(map);
-  probeMarker.setStyle({ color: getComputedStyle(document.body).color });
-  refreshProbe();
-}
+/* ---- map clicks place gateways while a layer is in placing mode ---- */
 map.on('click', e => {
   if (placingLayer) { map.closePopup(); addGateway(placingLayer, e.latlng); }
-  else setProbe(e.latlng);
 });
 
 /* ---- status bar ---- */
 const stCursor = document.getElementById('stcursor'), stZoom = document.getElementById('stzoom');
-map.on('mousemove', e => { stCursor.textContent = e.latlng.lat.toFixed(4) + ', ' + e.latlng.lng.toFixed(4); });
+map.on('mousemove', e => {
+  const h = map.hasLayer(relief) ? heightPeek(e.latlng) : null;
+  stCursor.textContent = e.latlng.lat.toFixed(4) + ', ' + e.latlng.lng.toFixed(4) +
+    (h === null ? '' : ' · ' + Math.max(0, Math.round(h)) + ' m');
+});
 map.on('mouseout', () => { stCursor.textContent = '—'; });
 map.on('zoomend', () => { stZoom.textContent = map.getZoom(); });
 
@@ -357,7 +480,7 @@ const placesEl = document.getElementById('places');
 PLACES.forEach(p => {
   const b = document.createElement('button');
   b.type = 'button'; b.textContent = p[0];
-  b.onclick = () => { map.setView([p[1], p[2]], p[3]); setProbe(L.latLng(p[1], p[2])); };
+  b.onclick = () => map.setView([p[1], p[2]], p[3]);
   placesEl.appendChild(b);
 });
 const coordIn = document.getElementById('coordin');
@@ -366,14 +489,14 @@ function jump(){
   if (!m){ coordIn.value = ''; coordIn.placeholder = 'Use: lat, lon'; return; }
   const ll = L.latLng(parseFloat(m[1]), parseFloat(m[2]));
   map.setView(ll, Math.max(map.getZoom(), 10));
-  setProbe(ll);
 }
 document.getElementById('gobtn').onclick = jump;
 coordIn.addEventListener('keydown', e => { if (e.key === 'Enter') jump(); });
 
 /* ---- view + export ---- */
 const FULL = L.geoJSON(COVERAGE).getBounds();
-function fit(){ map.fitBounds(FULL, { padding: [16, 16] }); }
+/* not animated: a zoom still in flight would swallow the rollout fit that follows at start-up */
+function fit(){ map.fitBounds(FULL, { padding: [16, 16], animate: false }); }
 document.getElementById('fitbtn').onclick = fit;
 fit();
 
@@ -400,7 +523,6 @@ function applyTheme(t){
   if (t) document.documentElement.setAttribute('data-theme', t);
   else document.documentElement.removeAttribute('data-theme');
   store.set('theme', t);
-  if (probeMarker) probeMarker.setStyle({ color: getComputedStyle(document.body).color });
 }
 applyTheme(store.get('theme', null));
 themeBtn.onclick = () => {
@@ -679,7 +801,7 @@ function saveGw(){
   const vis = store.get('gwOn', {});
   gwLayers.forEach(l => { vis[l.id] = l.on; });
   store.set('gwOn', vis);
-  if (remote()) queuePush();
+  if (remote()) { queuePush(); writeJournal(); }
   else store.set('gwLayers', gwLayers.map(l => ({
     id: l.id, name: l.name, color: l.color, radius: l.radius, on: l.on,
     gws: l.gws.map(g => ({ id: g.id, name: g.name, lat: g.lat, lng: g.lng, r: g.r }))
@@ -897,6 +1019,82 @@ function paintSync(){
 }
 function setSync(msg, err){ syncMsg = msg; syncErr = !!err; paintSync(); }
 
+/* ---- unsaved edits outlive the tab ----
+   Whatever has not reached the database yet is also written to this browser,
+   so a closed tab, a crash or a lost connection never drops an edit. It is put
+   back and sent the next time the same person opens the app here. */
+const journalKey = 'gwUnsaved.' + (user ? user.id : '');
+let carry = remote() ? store.get(journalKey, null) : null;   /* from an earlier session, not put back yet */
+let journalText = JSON.stringify(carry);
+function unsavedChanges(){
+  const now = currentRows(), out = { layers: {}, gws: {} };
+  for (const [kind, cur, old] of [['layers', now.layers, synced.layers], ['gws', now.gws, synced.gws]]){
+    for (const r of cur.values()){
+      const o = old.get(r.id), d = {};
+      if (!o) { out[kind][r.id] = { add: r }; continue; }
+      for (const k in r) if (r[k] !== o[k]) d[k] = r[k];
+      if (Object.keys(d).length) out[kind][r.id] = { set: d };
+    }
+    for (const id of old.keys()) if (!cur.has(id)) out[kind][id] = { del: 1 };
+  }
+  return out;
+}
+function writeJournal(){
+  if (!remote()) return;
+  const j = unsavedChanges();
+  if (carry) for (const kind in j) j[kind] = Object.assign({}, carry[kind], j[kind]);
+  const value = Object.keys(j.layers).length || Object.keys(j.gws).length ? j : null, text = JSON.stringify(value);
+  if (text === journalText) return;        /* an idle tab never overwrites another tab's record */
+  journalText = text;
+  store.set(journalKey, value);
+}
+/* put an earlier session's unsaved edits back on top of what the database holds now.
+   Rows someone else has since deleted stay deleted; rows already saved are left alone. */
+function replayCarry(){
+  const c = carry;
+  carry = null;
+  if (!c) return;
+  const touched = new Set();
+  for (const id in c.layers || {}){
+    const e = c.layers[id], ly = gwLayers.find(l => l.id === id);
+    if (e.add && !ly){
+      const on = store.get('gwOn', {})[id] !== false;
+      const made = { id: id, name: e.add.name, color: e.add.color, radius: e.add.radius_m, on: on, gws: [],
+                     group: L.layerGroup(), stat: { n: 0, ex: 0 } };
+      if (on) made.group.addTo(map);
+      gwLayers.push(made);
+    } else if (e.set && ly){
+      if ('name' in e.set) ly.name = e.set.name;
+      if ('radius_m' in e.set) ly.radius = e.set.radius_m;
+    } else if (e.del && ly) dropLayerLocal(ly);
+  }
+  for (const id in c.gws || {}){
+    const e = c.gws[id], hit = findGw(id);
+    if (e.add && !hit){
+      const ly = gwLayers.find(l => l.id === e.add.layer_id);
+      if (!ly) continue;
+      const g = { id: id, name: e.add.name, lat: e.add.lat, lng: e.add.lng, r: e.add.radius_m };
+      ly.gws.push(g);
+      mountGateway(ly, g);
+      touched.add(ly);
+    } else if (e.set && hit){
+      const g = hit.g;
+      if ('name' in e.set) g.name = e.set.name;
+      if ('lat' in e.set) g.lat = e.set.lat;
+      if ('lng' in e.set) g.lng = e.set.lng;
+      if ('radius_m' in e.set) g.r = e.set.radius_m;
+      g.marker.setLatLng([g.lat, g.lng]); g.circle.setLatLng([g.lat, g.lng]); g.circle.setRadius(g.r);
+      touched.add(hit.ly);
+    } else if (e.del && hit){
+      hit.ly.group.removeLayer(hit.g.marker); hit.ly.group.removeLayer(hit.g.circle);
+      hit.ly.gws.splice(hit.ly.gws.indexOf(hit.g), 1);
+      touched.add(hit.ly);
+    }
+  }
+  touched.forEach(ly => { if (gwLayers.indexOf(ly) !== -1) layerStats(ly); });
+  saveGw();
+}
+
 /* the next single database operation needed to bring the server in line with this browser, or null */
 function nextOp(){
   const now = currentRows();
@@ -944,10 +1142,11 @@ async function pushRemote(){
     }
     setSync('Saved');
   } catch (e) {
-    setSync('Not saved yet: ' + (e.message || e) + ' Retrying…', true);
+    setSync('Not saved yet (' + (e.message || e) + '). Your changes are kept on this device and sent automatically.', true);
     clearTimeout(retryTimer);
     retryTimer = setTimeout(queuePush, 5000);
   }
+  writeJournal();
 }
 
 function findGw(id){
@@ -1064,6 +1263,8 @@ async function reconcile(){
     const lid = new Set(ls.map(r => r.id)), gid = new Set(gs.map(r => r.id));
     [...synced.gws.keys()].forEach(id => { if (!gid.has(id)) applyRemoteDelete('gws', id); });
     [...synced.layers.keys()].forEach(id => { if (!lid.has(id)) applyRemoteDelete('layers', id); });
+    replayCarry();
+    writeJournal();
     scheduleRender();
     if (syncMsg === 'Loading…' || (syncErr && !nextOp())) setSync('Saved');
     return;

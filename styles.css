@@ -105,18 +105,6 @@ button{font:inherit;color:inherit}
 .slider input{flex:1;accent-color:var(--accent)}
 .slider output{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--ink-2);width:36px;text-align:right;font-variant-numeric:tabular-nums}
 
-.probe{background:var(--sunken);border:1px solid var(--line);border-radius:4px;padding:11px 12px}
-.probe .hint{color:var(--ink-3);font-size:12.5px;margin:0}
-.probe .coord{
-  font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--ink);margin:0 0 8px;
-  font-variant-numeric:tabular-nums;
-}
-.probe ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px}
-.probe li{display:flex;align-items:center;gap:8px;font-size:12.5px}
-.probe li .dot{width:9px;height:9px;border-radius:2px;flex:none}
-.probe li .no{color:var(--ink-3)}
-.probe .none{font-size:12.5px;color:var(--ink-3);margin:0}
-
 .jump{display:flex;gap:6px}
 .jump input{
   flex:1;min-width:0;border:1px solid var(--line);background:var(--surface);color:var(--ink);
@@ -166,6 +154,11 @@ button{font:inherit;color:inherit}
 .swatchrow span{display:flex;align-items:center;gap:5px}
 .swatchrow i{width:9px;height:9px;border-radius:50%;display:inline-block}
 canvas.meter-canvas{position:absolute;left:0;top:0;pointer-events:none}
+.leaflet-terrain-pane{mix-blend-mode:hard-light;pointer-events:none}
+.reliefkey{display:flex;align-items:center;gap:8px;padding:4px 8px 0;
+  font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.reliefkey i{flex:1;height:8px;border-radius:2px;border:1px solid var(--line-2);background:linear-gradient(90deg,#EDEAE4,#5F574C)}
+#terrainctl .hint{color:var(--ink-3);font-size:12px;margin:8px 8px 0;line-height:1.45}
 .mapwrap{position:relative;min-width:0;min-height:0}
 .brief{
   position:absolute;top:12px;right:12px;z-index:900;width:min(430px,calc(100% - 24px));
