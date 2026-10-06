@@ -530,6 +530,7 @@ themeBtn.onclick = () => {
   const dark = cur ? cur === 'dark'
     : window.matchMedia('(prefers-color-scheme: dark)').matches;
   applyTheme(dark ? 'light' : 'dark');
+  tagCanvas._schedule();
 };
 
 restack();
@@ -604,11 +605,11 @@ function rebuildIndex(){
 }
 
 /* ---- canvas overlay ---- */
-const MeterCanvas = L.Layer.extend({
+const CanvasOverlay = L.Layer.extend({
   onAdd(map){
     this._map = map;
     this._c = L.DomUtil.create('canvas', 'meter-canvas');
-    map.getPanes().overlayPane.appendChild(this._c);
+    map.getPane(this.options.pane).appendChild(this._c);
     map.on('move zoom resize zoomend moveend viewreset', this._schedule, this);
     this._schedule();
   },
@@ -617,10 +618,11 @@ const MeterCanvas = L.Layer.extend({
     L.DomUtil.remove(this._c);
   },
   _schedule(){
-    if (this._raf) return;
+    if (this._raf || !this._map) return;
     this._raf = requestAnimationFrame(() => { this._raf = 0; this._draw(); });
   },
   _draw(){
+    if (!this._map) return;                  /* switched off while a frame was waiting */
     const map = this._map, c = this._c, size = map.getSize();
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     if (c.width !== size.x * dpr || c.height !== size.y * dpr){
@@ -631,6 +633,11 @@ const MeterCanvas = L.Layer.extend({
     const ctx = c.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, size.x, size.y);
+    this.paint(ctx, map, size);
+  }
+});
+const MeterCanvas = CanvasOverlay.extend({
+  paint(ctx, map){
     if (activeView.id === 'none') return;
     const z = map.getZoom();
     const r = z >= 16 ? 4 : z >= 15 ? 3 : z >= 13 ? 2 : 1.6;
@@ -699,11 +706,12 @@ document.getElementById('asof').textContent =
 
 /* ---- transformers and substation ---- */
 const trLayer = L.layerGroup();
+const trRadius = t => Math.max(4, Math.min(16, Math.sqrt(t.n) * 0.75));
 METERS.transformers.forEach((t, k) => {
   const share = t.n ? t.no3g / t.n : 0;
   const f = FEEDERS[trFeeder[k]];
   L.circleMarker([t.lat, t.lng], {
-    radius: Math.max(4, Math.min(16, Math.sqrt(t.n) * 0.75)),
+    radius: trRadius(t),
     color: f.color, weight: 1.8, fillColor: f.color, fillOpacity: 0.3
   }).bindPopup(
     '<b>' + (t.name || t.code) + '</b><br>' + t.code +
@@ -719,8 +727,50 @@ L.circleMarker([METERS.substation.lat, METERS.substation.lng], {
 }).bindPopup('<b>' + METERS.substation.name + '</b><br>' + METERS.substation.code +
              '<br>' + METERS.substation.county + ' County').addTo(subLayer);
 
+/* ---- transformer tags ----
+   The transformer part of each code (TRN86) written beside its site, outlined
+   in the feeder colour. Where tags would overlap, the site with more households
+   keeps its tag and the others appear on zooming in. */
+const trTag = t => { const m = /([A-Z]+\d+)$/.exec(t.code || ''); return m ? m[1] : t.code; };
+const trBySize = METERS.transformers.map((t, k) => k).sort((a, b) => METERS.transformers[b].n - METERS.transformers[a].n);
+const TAG_MIN_ZOOM = 12;
+map.createPane('trtags').style.zIndex = 450;
+const TagCanvas = CanvasOverlay.extend({
+  options: { pane: 'trtags' },
+  paint(ctx, map, size){
+    if (!map.hasLayer(trLayer) || map.getZoom() < TAG_MIN_ZOOM) return;
+    const css = getComputedStyle(document.documentElement);
+    const ink = css.getPropertyValue('--ink').trim(), surface = css.getPropertyValue('--surface').trim();
+    const h = 15, gap = 3, placed = [];
+    ctx.font = '500 10.5px "IBM Plex Mono", monospace';
+    ctx.textBaseline = 'middle';
+    ctx.lineWidth = 1.3;
+    for (const k of trBySize){
+      const t = METERS.transformers[k], f = FEEDERS[trFeeder[k]];
+      if (!f.on) continue;
+      const p = map.latLngToContainerPoint([t.lat, t.lng]);
+      if (p.x < -80 || p.y < -30 || p.x > size.x + 80 || p.y > size.y + 30) continue;
+      const text = trTag(t), w = Math.ceil(ctx.measureText(text).width) + 9, r = trRadius(t) + gap;
+      /* beside the site if there is room: right, left, above, below */
+      const spot = [[p.x + r, p.y - h / 2], [p.x - r - w, p.y - h / 2], [p.x - w / 2, p.y - r - h], [p.x - w / 2, p.y + r]]
+        .find(([x, y]) => !placed.some(b => x < b.x + b.w + 2 && x + w + 2 > b.x && y < b.y + h + 2 && y + h + 2 > b.y));
+      if (!spot) continue;
+      const x = Math.round(spot[0]) + 0.5, y = Math.round(spot[1]) + 0.5;
+      placed.push({ x: x, y: y, w: w });
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(x, y, w, h, 3); else ctx.rect(x, y, w, h);
+      ctx.globalAlpha = 0.92; ctx.fillStyle = surface; ctx.fill();
+      ctx.globalAlpha = 1; ctx.strokeStyle = f.color; ctx.stroke();
+      ctx.fillStyle = ink; ctx.fillText(text, x + 4.5, y + h / 2 + 0.5);
+    }
+  }
+});
+const tagCanvas = new TagCanvas();
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => tagCanvas._schedule());
+
 const assetCtl = document.getElementById('assetctl');
 [['Transformer sites', trLayer, '#0A5A70', true],
+ ['Transformer tags', tagCanvas, '#43585D', true],
  ['Paynesville substation', subLayer, '#FFD43B', true]].forEach(([label, layer, col, on]) => {
   const key = 'asset.' + label;
   const start = store.get(key, on);
@@ -734,6 +784,7 @@ const assetCtl = document.getElementById('assetctl');
     b.setAttribute('aria-pressed', String(nowOn));
     if (nowOn) layer.addTo(map); else map.removeLayer(layer);
     store.set(key, nowOn);
+    tagCanvas._schedule();
   };
   assetCtl.appendChild(b);
 });
@@ -757,7 +808,7 @@ function setFeeders(pick){
     if (f.on) trLayer.addLayer(f.group); else trLayer.removeLayer(f.group);
   });
   store.set('feedersOff', FEEDERS.filter(f => !f.on).map(f => f.no));
-  countViews(); paintViewCounts(); rebuildIndex(); meterCanvas._schedule(); renderKey(); paintFeeders();
+  countViews(); paintViewCounts(); rebuildIndex(); meterCanvas._schedule(); tagCanvas._schedule(); renderKey(); paintFeeders();
 }
 FEEDERS.forEach(f => {
   const row = document.createElement('div');
