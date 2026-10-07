@@ -1,4 +1,4 @@
-# LEC Rollout Coverage
+# Deployment Strategy System
 
 A signed-in web map for planning the LEC meter rollout: household and transformer
 locations, mobile coverage, and shared gateway planning layers.

@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------
-   LEC Rollout Coverage
+   Deployment Strategy System
    A signed-in web app. All data (households, transformers, coverage
    polygons, gateway layers) lives in Supabase and is loaded after
    sign-in; nothing sensitive ships with these files.
@@ -181,9 +181,10 @@ function dropdown(root){
   const btn = root.querySelector('.mselbtn'), menu = root.querySelector('.mselmenu');
   const open = on => { menu.hidden = !on; btn.setAttribute('aria-expanded', String(on)); };
   btn.onclick = () => open(menu.hidden);
-  document.addEventListener('click', e => { if (!root.contains(e.target)) open(false); });
+  /* the path, not contains(): a ticked row may be redrawn, and so detached, before the click gets here */
+  document.addEventListener('click', e => { if (e.composedPath().indexOf(root) === -1) open(false); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !menu.hidden) { open(false); btn.focus(); } });
-  return { menu: menu, show: (chips, none) => {
+  return { menu: menu, open: open, show: (chips, none) => {
     btn.querySelector('.chips').innerHTML = chips.length
       ? chips.map(([c, label]) => '<span class="chip"><i style="background:' + c + '"></i>' + label + '</span>').join('')
       : '<span class="none">' + none + '</span>';
@@ -863,7 +864,8 @@ paintFeeders();
    User-named layers of gateway points. Each gateway has a radius and
    is tested against every household point. */
 const GW_COLORS = ['#7C3AED', '#0E9F6E', '#DB2777', '#2563EB', '#B45309', '#475569'];
-const gwEl = document.getElementById('gwlayers');
+const gwEl = document.getElementById('gwlayers'), gwOpts = document.getElementById('gwopts');
+const gwSel = dropdown(document.getElementById('gwsel'));
 const mapWrap = document.querySelector('.mapwrap');
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 /* uuid v4, so ids can be used as database keys */
@@ -875,6 +877,7 @@ const remote = () => !!(sb && user);
 
 let gwLayers = remote() ? [] : store.get('gwLayers', []);
 let placingLayer = null;
+let editLayer = null;      /* the one layer whose details are open under the list */
 
 function saveGw(){
   const vis = store.get('gwOn', {});
@@ -980,69 +983,100 @@ function addGateway(ly, latlng){
 function setPlacing(ly){
   placingLayer = ly;
   mapWrap.classList.toggle('placing', !!ly);
+  if (ly) editLayer = ly;
   if (ly && !ly.on) { ly.on = true; ly.group.addTo(map); saveGw(); }
   renderGw();
 }
+function showGwLayer(ly, on){
+  ly.on = on;
+  if (on) ly.group.addTo(map);
+  else { map.removeLayer(ly.group); if (placingLayer === ly) { placingLayer = null; mapWrap.classList.remove('placing'); } }
+  saveGw(); renderGw();
+}
+/* open one layer's details under the list, or close them with null */
+function editGw(ly){
+  if (placingLayer && placingLayer !== ly) { placingLayer = null; mapWrap.classList.remove('placing'); }
+  editLayer = ly;
+  gwSel.open(false);
+  if (ly && !ly.on) showGwLayer(ly, true); else renderGw();
+}
 function renderGw(){
-  gwEl.innerHTML = gwLayers.length ? '' :
+  if (gwLayers.indexOf(editLayer) === -1) editLayer = null;
+  gwSel.show(gwLayers.filter(l => l.on).map(l => [l.color, esc(l.name)]),
+             gwLayers.length ? 'No gateway layers shown' : 'No gateway layers yet');
+  gwOpts.innerHTML = gwLayers.length ? '' :
     '<p class="gwempty">No layers yet. Name one below, then click the map to place gateways.</p>';
   gwLayers.forEach(ly => {
-    const placing = placingLayer === ly;
-    const card = document.createElement('div');
-    card.className = 'gwl';
-    card.dataset.placing = String(placing);
-    card.innerHTML =
-      '<div class="gwrow">' +
-        '<button type="button" class="gwsw" aria-pressed="' + ly.on + '" title="Show / hide layer" aria-label="Show or hide layer"' +
-          ' style="background:' + ly.color + ';border-color:' + ly.color + '"></button>' +
-        '<input class="gwname" aria-label="Layer name" value="' + esc(ly.name) + '">' +
-        '<button type="button" class="gwx" title="Delete layer" aria-label="Delete layer">&times;</button>' +
-      '</div>' +
-      '<div class="gwstat" title="A meter inside several circles is counted once"><b>' + fmt(ly.stat.n) + '</b> meters in range' +
-        '<span>' + (ly.stat.n / M.n * 100).toFixed(1) + '% of ' + fmt(M.n) + ' &middot; ' +
-        ly.gws.length + ' gateway' + (ly.gws.length === 1 ? '' : 's') + '</span></div>' +
-      '<div class="gwrow gwctl">' +
-        '<label title="Applies to every gateway in this layer">Radius <input type="number" class="gwrad" min="10" step="10" value="' + ly.radius + '"> m</label>' +
-        '<button type="button" class="ghost gwplace" aria-pressed="' + placing + '">' + (placing ? 'Done placing' : 'Place gateways') + '</button>' +
-      '</div>';
-    card.querySelector('.gwsw').onclick = () => {
-      ly.on = !ly.on;
-      if (ly.on) ly.group.addTo(map); else { map.removeLayer(ly.group); if (placing) placingLayer = null, mapWrap.classList.remove('placing'); }
-      saveGw(); renderGw();
-    };
-    card.querySelector('.gwname').onchange = e => { ly.name = e.target.value.trim() || ly.name; saveGw(); renderGw(); };
-    card.querySelector('.gwx').onclick = () => {
-      if (ly.gws.length && !confirm('Delete "' + ly.name + '" and its ' + ly.gws.length + ' gateway(s)?')) return;
-      map.removeLayer(ly.group);
-      gwLayers.splice(gwLayers.indexOf(ly), 1);
-      if (placing) { placingLayer = null; mapWrap.classList.remove('placing'); }
-      saveGw(); renderGw();
-    };
-    card.querySelector('.gwrad').onchange = e => {
-      const v = Math.round(+e.target.value);
-      if (!(v > 0)) { e.target.value = ly.radius; return; }
-      ly.radius = v;
-      ly.gws.forEach(g => { g.r = v; g.circle.setRadius(v); });
-      gwChanged(ly);
-    };
-    card.querySelector('.gwplace').onclick = () => setPlacing(placing ? null : ly);
-    if (ly.gws.length){
-      const ul = document.createElement('ul');
-      ul.className = 'gwlist';
-      ly.gws.forEach(g => {
-        const li = document.createElement('li'), b = document.createElement('button');
-        b.type = 'button';
-        b.innerHTML = '<span>' + esc(g.name) + '</span><span>' + fmt(g.stat.n) + '</span>';
-        b.onclick = () => {
-          if (!ly.on) { ly.on = true; ly.group.addTo(map); saveGw(); renderGw(); }
-          map.panTo([g.lat, g.lng]); g.marker.openPopup();
-        };
-        li.appendChild(b); ul.appendChild(li);
-      });
-      card.appendChild(ul);
-    }
-    gwEl.appendChild(card);
+    const row = document.createElement('div');
+    row.className = 'fdr';
+    row.innerHTML =
+      '<button type="button" class="lyr" aria-pressed="' + ly.on + '" title="Show or hide on the map">' +
+        '<span class="sw" style="background:' + ly.color + ';border-color:' + ly.color + '"></span>' +
+        '<span class="lname">' + esc(ly.name) + '<em>' + ly.gws.length + ' gateway' + (ly.gws.length === 1 ? '' : 's') +
+        ' &middot; ' + fmt(ly.stat.n) + ' meters in range</em></span></button>' +
+      '<button type="button" class="allbtn" title="Rename, place gateways, change the radius or delete">' +
+        (editLayer === ly ? 'close' : 'edit') + '</button>';
+    row.querySelector('.lyr').onclick = () => showGwLayer(ly, !ly.on);
+    row.querySelector('.allbtn').onclick = () => editGw(editLayer === ly ? null : ly);
+    gwOpts.appendChild(row);
   });
+  gwEl.innerHTML = '';
+  if (editLayer) gwEl.appendChild(gwCard(editLayer));
+}
+function gwCard(ly){
+  const placing = placingLayer === ly;
+  const card = document.createElement('div');
+  card.className = 'gwl';
+  card.dataset.placing = String(placing);
+  card.innerHTML =
+    '<div class="gwrow">' +
+      '<span class="gwdot" style="background:' + ly.color + '"></span>' +
+      '<input class="gwname" aria-label="Layer name" value="' + esc(ly.name) + '">' +
+      '<button type="button" class="allbtn gwclose">close</button>' +
+    '</div>' +
+    '<div class="gwstat" title="A meter inside several circles is counted once"><b>' + fmt(ly.stat.n) + '</b> meters in range' +
+      '<span>' + (ly.stat.n / M.n * 100).toFixed(1) + '% of ' + fmt(M.n) + ' &middot; ' +
+      ly.gws.length + ' gateway' + (ly.gws.length === 1 ? '' : 's') + '</span></div>' +
+    '<div class="gwrow gwctl">' +
+      '<label title="Applies to every gateway in this layer">Radius <input type="number" class="gwrad" min="10" step="10" value="' + ly.radius + '"> m</label>' +
+      '<button type="button" class="ghost gwplace" aria-pressed="' + placing + '">' + (placing ? 'Done placing' : 'Place gateways') + '</button>' +
+    '</div>';
+  card.querySelector('.gwname').onchange = e => { ly.name = e.target.value.trim() || ly.name; saveGw(); renderGw(); };
+  card.querySelector('.gwclose').onclick = () => editGw(null);
+  card.querySelector('.gwrad').onchange = e => {
+    const v = Math.round(+e.target.value);
+    if (!(v > 0)) { e.target.value = ly.radius; return; }
+    ly.radius = v;
+    ly.gws.forEach(g => { g.r = v; g.circle.setRadius(v); });
+    gwChanged(ly);
+  };
+  card.querySelector('.gwplace').onclick = () => setPlacing(placing ? null : ly);
+  if (ly.gws.length){
+    const ul = document.createElement('ul');
+    ul.className = 'gwlist';
+    ly.gws.forEach(g => {
+      const li = document.createElement('li'), b = document.createElement('button');
+      b.type = 'button';
+      b.innerHTML = '<span>' + esc(g.name) + '</span><span>' + fmt(g.stat.n) + '</span>';
+      b.onclick = () => {
+        if (!ly.on) showGwLayer(ly, true);
+        map.panTo([g.lat, g.lng]); g.marker.openPopup();
+      };
+      li.appendChild(b); ul.appendChild(li);
+    });
+    card.appendChild(ul);
+  }
+  const del = document.createElement('button');
+  del.className = 'ghost gwdel'; del.type = 'button'; del.textContent = 'Delete layer';
+  del.onclick = () => {
+    if (ly.gws.length && !confirm('Delete "' + ly.name + '" and its ' + ly.gws.length + ' gateway(s)?')) return;
+    map.removeLayer(ly.group);
+    gwLayers.splice(gwLayers.indexOf(ly), 1);
+    if (placing) { placingLayer = null; mapWrap.classList.remove('placing'); }
+    saveGw(); renderGw();
+  };
+  card.appendChild(del);
+  return card;
 }
 const gwNewName = document.getElementById('gwnewname');
 function addGwLayer(){
@@ -1053,6 +1087,7 @@ function addGwLayer(){
   };
   gwLayers.push(ly);
   gwNewName.value = '';
+  gwSel.open(false);
   saveGw();
   setPlacing(ly);
 }
