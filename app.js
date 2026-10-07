@@ -865,7 +865,7 @@ paintFeeders();
    is tested against every household point. */
 const GW_COLORS = ['#7C3AED', '#0E9F6E', '#DB2777', '#2563EB', '#B45309', '#475569'];
 const gwEl = document.getElementById('gwlayers'), gwOpts = document.getElementById('gwopts');
-const gwSel = dropdown(document.getElementById('gwsel'));
+const gwSel = dropdown(document.getElementById('gwsel')), gwAll = document.getElementById('gwall');
 const mapWrap = document.querySelector('.mapwrap');
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 /* uuid v4, so ids can be used as database keys */
@@ -993,6 +993,12 @@ function showGwLayer(ly, on){
   else { map.removeLayer(ly.group); if (placingLayer === ly) { placingLayer = null; mapWrap.classList.remove('placing'); } }
   saveGw(); renderGw();
 }
+gwAll.onclick = () => {
+  const on = !gwLayers.some(l => l.on);
+  gwLayers.forEach(l => { l.on = on; if (on) l.group.addTo(map); else map.removeLayer(l.group); });
+  if (!on && placingLayer) { placingLayer = null; mapWrap.classList.remove('placing'); }
+  saveGw(); renderGw();
+};
 /* open one layer's details under the list, or close them with null */
 function editGw(ly){
   if (placingLayer && placingLayer !== ly) { placingLayer = null; mapWrap.classList.remove('placing'); }
@@ -1002,8 +1008,12 @@ function editGw(ly){
 }
 function renderGw(){
   if (gwLayers.indexOf(editLayer) === -1) editLayer = null;
-  gwSel.show(gwLayers.filter(l => l.on).map(l => [l.color, esc(l.name)]),
-             gwLayers.length ? 'No gateway layers shown' : 'No gateway layers yet');
+  /* a few layers are named in the box; more than that are counted, so the box stays one line */
+  const shown = gwLayers.filter(l => l.on);
+  if (shown.length > 3) gwSel.show([], (shown.length === gwLayers.length ? 'All ' : shown.length + ' of ') + gwLayers.length + ' layers shown');
+  else gwSel.show(shown.map(l => [l.color, esc(l.name)]), gwLayers.length ? 'No gateway layers shown' : 'No gateway layers yet');
+  gwAll.hidden = !gwLayers.length;
+  gwAll.textContent = shown.length ? 'hide all' : 'show all';
   gwOpts.innerHTML = gwLayers.length ? '' :
     '<p class="gwempty">No layers yet. Name one below, then click the map to place gateways.</p>';
   gwLayers.forEach(ly => {
