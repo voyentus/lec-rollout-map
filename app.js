@@ -77,8 +77,7 @@ async function loadData(sb){
       lat: Uint32Array.from(hh.lat), lng: Uint32Array.from(hh.lng),
       flags: flags, status: status, tidx: tidx,
       transformers: transformers, substation: m.substation, generatedAt: m.generated_at
-    },
-    briefHtml: m.brief_html
+    }
   };
 }
 async function enter(user){
@@ -175,6 +174,21 @@ function covers(geom, lng, lat){
   return false;
 }
 const fmt = n => Math.round(n).toLocaleString('en-GB');
+
+/* a compact multi-select: a box listing what is switched on, with a menu that drops
+   down from it. The menu stays open while several things are ticked. */
+function dropdown(root){
+  const btn = root.querySelector('.mselbtn'), menu = root.querySelector('.mselmenu');
+  const open = on => { menu.hidden = !on; btn.setAttribute('aria-expanded', String(on)); };
+  btn.onclick = () => open(menu.hidden);
+  document.addEventListener('click', e => { if (!root.contains(e.target)) open(false); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !menu.hidden) { open(false); btn.focus(); } });
+  return { menu: menu, show: (chips, none) => {
+    btn.querySelector('.chips').innerHTML = chips.length
+      ? chips.map(([c, label]) => '<span class="chip"><i style="background:' + c + '"></i>' + label + '</span>').join('')
+      : '<span class="none">' + none + '</span>';
+  } };
+}
 
 /* ---- map ---- */
 const map = L.map('map', { zoomControl: true, attributionControl: true, minZoom: 5, zoomSnap: 0.5, zoomDelta: 0.5 })
@@ -364,7 +378,7 @@ COVERAGE.features.forEach(f => {
   (byOperator[f.properties.operator] = byOperator[f.properties.operator] || []).push(f);
 });
 const TECH_ORDER = { GSM: 0, '3G': 1, LTE: 2 };
-const railEl = document.getElementById('controls');
+const covSel = dropdown(document.getElementById('covsel')), railEl = covSel.menu;
 const DEFAULT_ON = ['Orange|3G', 'LonestarCell MTN|3G'];
 const savedOn = store.get('layers', null);
 
@@ -446,6 +460,7 @@ function syncAll(){
     b.textContent = ops[op].some(e => e.on) ? 'hide all' : 'show all';
   });
   store.set('layers', on.map(e => e.key));
+  covSel.show(on.map(e => [e.style.c, e.feature.properties.operator_full.split(' ')[0] + ' ' + e.style.label]), 'No coverage shown');
 }
 
 /* ---- opacity ---- */
@@ -570,24 +585,26 @@ const trFeeder = METERS.transformers.map(t => {
 });
 const hhFeeder = Uint8Array.from(M.tidx, v => trFeeder[v]);
 
+/* What the household points show: every household, or just the ones with one coverage gap. */
+const VIEW_GROUPS = [['all', ''], ['gap', 'Only households with a coverage gap']];
 const VIEWS = [
-  { id: 'all',    name: 'All households',            desc: 'existing meter vs not yet metered',
+  { id: 'all',    group: 'all', name: 'All households',
     test: () => true,
-    color: i => M.status[i] ? '#2A8DA8' : '#8FA3A8' },
-  { id: 'feeder', name: 'By feeder',                 desc: 'coloured by the feeder each household is on',
-    test: () => true,
-    color: i => FEEDERS[hhFeeder[i]].color },
-  { id: 'no3g',   name: 'No 3G from either operator', desc: 'outside both 3G footprints',
-    test: i => !(M.flags[i] & (BIT.or3g | BIT.ls3g)), color: () => '#C2410C' },
-  { id: 'nolsl',  name: 'Outside Lonestar LTE',       desc: 'Orange LTE only',
-    test: i => !(M.flags[i] & BIT.lsLte), color: () => '#E9761C' },
-  { id: 'norl',   name: 'Outside Orange LTE',         desc: 'Lonestar LTE only',
-    test: i => !(M.flags[i] & BIT.orLte), color: () => '#7A3BAF' },
-  { id: 'onelte', name: 'LTE from one operator only',  desc: 'no dual-network fallback',
+    color: i => M.status[i] ? '#2A8DA8' : '#8FA3A8',
+    key: () => [['#2A8DA8', 'existing meter'], ['#8FA3A8', 'not yet metered']] },
+  { id: 'no3g',   group: 'gap', name: 'No 3G from either operator',
+    test: i => !(M.flags[i] & (BIT.or3g | BIT.ls3g)), color: () => '#C2410C',
+    key: () => [['#C2410C', 'outside both operators\u2019 3G coverage']] },
+  { id: 'nolsl',  group: 'gap', name: 'No Lonestar LTE',
+    test: i => !(M.flags[i] & BIT.lsLte), color: () => '#E9761C',
+    key: () => [['#E9761C', 'outside Lonestar LTE coverage']] },
+  { id: 'norl',   group: 'gap', name: 'No Orange LTE',
+    test: i => !(M.flags[i] & BIT.orLte), color: () => '#7A3BAF',
+    key: () => [['#7A3BAF', 'outside Orange LTE coverage']] },
+  { id: 'onelte', group: 'gap', name: 'LTE from one operator only',
     test: i => { const a = !!(M.flags[i] & BIT.orLte), b = !!(M.flags[i] & BIT.lsLte); return a !== b; },
-    color: i => (M.flags[i] & BIT.orLte) ? '#E9761C' : '#7A3BAF' },
-  { id: 'none',   name: 'Hide meters',                desc: '',
-    test: () => false, color: () => '#000' }
+    color: i => (M.flags[i] & BIT.orLte) ? '#E9761C' : '#7A3BAF',
+    key: () => [['#E9761C', 'Orange LTE only'], ['#7A3BAF', 'Lonestar LTE only']] }
 ];
 /* counts and the drawn points only include feeders that are switched on */
 const viewCount = {};
@@ -595,13 +612,14 @@ function countViews(){
   VIEWS.forEach(v => { let c = 0; for (let i = 0; i < M.n; i++) if (FEEDERS[hhFeeder[i]].on && v.test(i)) c++; viewCount[v.id] = c; });
 }
 countViews();
-let activeView = VIEWS.find(v => v.id === store.get('view', 'no3g')) || VIEWS[2];
+let activeView = VIEWS.find(v => v.id === store.get('view', 'no3g')) || VIEWS[0];
+let showHouseholds = store.get('households', store.get('view', '') !== 'none');   /* 'none' was the old way to hide them */
 let visibleIdx = [];
 function rebuildIndex(){
   visibleIdx = [];
   for (let i = 0; i < M.n; i++) if (FEEDERS[hhFeeder[i]].on && activeView.test(i)) visibleIdx.push(i);
   document.getElementById('stmeters').textContent =
-    activeView.id === 'none' ? 'hidden' : visibleIdx.length.toLocaleString('en-GB') + ' shown';
+    showHouseholds ? visibleIdx.length.toLocaleString('en-GB') + ' shown' : 'hidden';
 }
 
 /* ---- canvas overlay ---- */
@@ -638,7 +656,7 @@ const CanvasOverlay = L.Layer.extend({
 });
 const MeterCanvas = CanvasOverlay.extend({
   paint(ctx, map){
-    if (activeView.id === 'none') return;
+    if (!showHouseholds) return;
     const z = map.getZoom();
     const r = z >= 16 ? 4 : z >= 15 ? 3 : z >= 13 ? 2 : 1.6;
     const bounds = map.getBounds().pad(0.05);
@@ -660,39 +678,45 @@ const meterCanvas = new MeterCanvas();
 rebuildIndex();
 meterCanvas.addTo(map);
 
-/* ---- view picker ---- */
-const viewsEl = document.getElementById('views');
-VIEWS.forEach(v => {
-  const b = document.createElement('button');
-  b.className = 'vw'; b.type = 'button';
-  b.setAttribute('aria-pressed', String(v.id === activeView.id));
-  b.title = v.desc;
-  b.innerHTML = '<span class="rd"></span><span class="vn">' + v.name + '</span><span class="vc"></span>';
-  b.onclick = () => {
-    activeView = v; store.set('view', v.id);
-    [...viewsEl.children].forEach((el, k) => el.setAttribute('aria-pressed', String(VIEWS[k].id === v.id)));
-    rebuildIndex(); meterCanvas._schedule(); renderKey();
-  };
-  viewsEl.appendChild(b);
-});
-function paintViewCounts(){
-  [...viewsEl.children].forEach((el, k) => {
-    el.querySelector('.vc').textContent = VIEWS[k].id === 'none' ? '' : viewCount[VIEWS[k].id].toLocaleString('en-GB');
+/* ---- household options ---- */
+const viewsEl = document.getElementById('views'), hhToggle = document.getElementById('hhtoggle');
+const viewBtns = [];
+function refreshHouseholds(){ paintViews(); rebuildIndex(); meterCanvas._schedule(); renderKey(); }
+VIEW_GROUPS.forEach(([group, title]) => {
+  const block = document.createElement('div');
+  block.className = 'opblock';
+  if (title) block.innerHTML = '<div class="ophead"><span class="nm">' + title + '</span></div>';
+  VIEWS.filter(v => v.group === group).forEach(v => {
+    const b = document.createElement('button');
+    b.className = 'vw'; b.type = 'button';
+    b.innerHTML = '<span class="rd"></span><span class="vn">' + v.name + '</span><span class="vc"></span>';
+    b.onclick = () => {
+      activeView = v; store.set('view', v.id);
+      showHouseholds = true; store.set('households', true);      /* choosing an option brings them back */
+      refreshHouseholds();
+    };
+    viewBtns.push([v, b]);
+    block.appendChild(b);
   });
+  viewsEl.appendChild(block);
+});
+hhToggle.onclick = () => {
+  showHouseholds = !showHouseholds; store.set('households', showHouseholds);
+  refreshHouseholds();
+};
+function paintViews(){
+  viewBtns.forEach(([v, b]) => b.setAttribute('aria-pressed', String(v === activeView)));
+  viewsEl.classList.toggle('off', !showHouseholds);
+  hhToggle.textContent = showHouseholds ? 'hide' : 'show';
 }
-paintViewCounts();
+function paintViewCounts(){
+  viewBtns.forEach(([v, b]) => { b.querySelector('.vc').textContent = viewCount[v.id].toLocaleString('en-GB'); });
+}
 function renderKey(){
-  const k = document.getElementById('meterkey');
-  if (activeView.id === 'all')
-    k.innerHTML = '<span><i style="background:#2A8DA8"></i>existing meter</span><span><i style="background:#8FA3A8"></i>not yet metered</span>';
-  else if (activeView.id === 'feeder')
-    k.innerHTML = FEEDERS.filter(f => f.on).map(f => '<span><i style="background:' + f.color + '"></i>' + f.name + '</span>').join('');
-  else if (activeView.id === 'onelte')
-    k.innerHTML = '<span><i style="background:#E9761C"></i>Orange LTE only</span><span><i style="background:#7A3BAF"></i>Lonestar LTE only</span>';
-  else if (activeView.id === 'none') k.innerHTML = '';
-  else k.innerHTML = '<span>' + activeView.desc + '</span>';
+  document.getElementById('meterkey').innerHTML = !showHouseholds ? '' :
+    activeView.key().map(([c, label]) => '<span><i style="background:' + c + '"></i>' + label + '</span>').join('');
 }
-renderKey();
+paintViews(); paintViewCounts(); renderKey();
 
 /* ---- KPIs ---- */
 let noneCovered3g = METERS.transformers.reduce((s, t) => s + t.no3g, 0);
@@ -789,10 +813,14 @@ const assetCtl = document.getElementById('assetctl');
   assetCtl.appendChild(b);
 });
 
-/* ---- feeders: show, hide or isolate each one ---- */
-const fdEl = document.getElementById('feeders'), fdAll = document.getElementById('fdall');
+/* ---- feeders: one compact multi-select ----
+   Closed, it lists the feeders that are on, each with its colour, so it doubles
+   as the key for the transformer colours. Open, each feeder can be ticked on or
+   off, or shown on its own. */
+const fdSel = dropdown(document.getElementById('feeders')), fdAll = document.getElementById('fdall');
 function paintFeeders(){
   const on = FEEDERS.filter(f => f.on);
+  fdSel.show(on.map(f => [f.color, f.no || 'n/a']), 'No feeders selected');
   FEEDERS.forEach(f => {
     const alone = on.length === 1 && f.on;
     f.btn.setAttribute('aria-pressed', String(f.on));
@@ -826,7 +854,7 @@ FEEDERS.forEach(f => {
     setFeeders(x => alone || x === f);
   };
   row.append(f.btn, f.solo);
-  fdEl.appendChild(row);
+  fdSel.menu.appendChild(row);
 });
 fdAll.onclick = () => setFeeders(() => true);
 paintFeeders();
@@ -1387,7 +1415,7 @@ document.getElementById('gwexport').onclick = () => {
 
 /* ---- export the current meter selection ---- */
 document.getElementById('dlmeters').onclick = () => {
-  if (activeView.id === 'none' || !visibleIdx.length) return;
+  if (!showHouseholds || !visibleIdx.length) return;
   const tf = METERS.transformers;
   const head = 'lat,lng,transformer_code,transformer_name,feeder,status,orange_gsm,orange_3g,orange_lte,lonestar_gsm,lonestar_3g,lonestar_lte\n';
   const lines = visibleIdx.map(i => {
@@ -1414,39 +1442,6 @@ const ROLLOUT = L.latLngBounds(
 );
 document.getElementById('fitbtn').onclick = () => map.fitBounds(ROLLOUT, { padding: [24, 24] });
 map.fitBounds(ROLLOUT, { padding: [24, 24] });
-
-/* ---- findings card ---- */
-const brief = document.getElementById('brief');
-brief.querySelector('.briefbody').innerHTML = data.briefHtml || '';
-const infoBtn = document.getElementById('infobtn');
-const briefDate = document.getElementById('briefdate');
-if (briefDate) briefDate.textContent = new Date(METERS.generatedAt).toISOString().slice(0, 10);
-L.DomEvent.disableClickPropagation(brief);
-L.DomEvent.disableScrollPropagation(brief);
-let briefOpen = false, briefAnim = null;
-function setBrief(open, animate){
-  briefOpen = open;
-  infoBtn.setAttribute('aria-expanded', String(open));
-  store.set('briefSeen', true);
-  if (briefAnim) { briefAnim.cancel(); briefAnim = null; }
-  if (open) brief.hidden = false;
-  if (!animate || !brief.animate || matchMedia('(prefers-reduced-motion:reduce)').matches) {
-    brief.hidden = !open;
-    return;
-  }
-  // collapse towards (or expand from) the header button
-  const b = brief.getBoundingClientRect(), t = infoBtn.getBoundingClientRect();
-  const dx = (t.left + t.width / 2) - (b.left + b.width / 2);
-  const dy = (t.top + t.height / 2) - (b.top + b.height / 2);
-  const min = { transform: `translate(${dx}px,${dy}px) scale(${t.width / b.width},${t.height / b.height})`, opacity: 0 };
-  const full = { transform: 'none', opacity: 1 };
-  briefAnim = brief.animate(open ? [min, full] : [full, min], { duration: 220, easing: 'cubic-bezier(.4,0,.2,1)' });
-  briefAnim.onfinish = () => { briefAnim = null; brief.hidden = !open; };
-}
-infoBtn.onclick = () => setBrief(!briefOpen, true);
-document.getElementById('briefclose').onclick = () => { setBrief(false, true); infoBtn.focus(); };
-document.addEventListener('keydown', e => { if (e.key === 'Escape' && briefOpen) setBrief(false, true); });
-setBrief(!store.get('briefSeen', false));
 
 }
 

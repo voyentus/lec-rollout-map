@@ -38,14 +38,6 @@
     </div>
     <div class="spacer"></div>
     <div class="seg" id="basemaps" role="group" aria-label="Basemap"></div>
-    <button class="iconbtn" id="infobtn" title="Coverage findings" aria-label="Coverage findings" aria-controls="brief" aria-expanded="false">
-      <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
-        <circle cx="8" cy="8" r="6.4" fill="none" stroke="currentColor" stroke-width="1.4"/>
-        <circle cx="8" cy="4.6" r="0.95" fill="currentColor"/>
-        <path d="M8 6.9v4.7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-      </svg>
-      <span>Findings</span>
-    </button>
     <button class="iconbtn" id="themebtn" title="Toggle light / dark" aria-label="Toggle light or dark theme"><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 1.8a6.2 6.2 0 0 0 0 12.4z" fill="currentColor"/></svg></button>
     <span class="whoami" id="whoami"></span>
     <button class="iconbtn" id="signout" type="button">Sign out</button>
@@ -59,14 +51,20 @@
       </div>
 
       <div class="sect">
-        <h2>Show meters</h2>
+        <h2>Households <button class="allbtn" id="hhtoggle" type="button">hide</button></h2>
         <div class="views" id="views"></div>
         <div class="swatchrow" id="meterkey"></div>
       </div>
 
       <div class="sect">
         <h2>Feeders <button class="allbtn" id="fdall" type="button" hidden>show all</button></h2>
-        <div id="feeders"></div>
+        <div class="msel" id="feeders">
+          <button class="mselbtn" type="button" aria-haspopup="true" aria-expanded="false" title="Choose which feeders to show">
+            <span class="chips"></span>
+            <svg width="10" height="6" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div class="mselmenu" hidden></div>
+        </div>
       </div>
 
       <div class="sect">
@@ -96,13 +94,16 @@
 
       <div class="sect">
         <h2>Coverage layers</h2>
-        <div id="controls"></div>
-      </div>
-
-      <div class="sect">
-        <h2>Fill opacity</h2>
+        <div class="msel" id="covsel">
+          <button class="mselbtn" type="button" aria-haspopup="true" aria-expanded="false" title="Choose which coverage layers to show">
+            <span class="chips"></span>
+            <svg width="10" height="6" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div class="mselmenu" hidden></div>
+        </div>
         <div class="slider">
-          <input type="range" id="opacity" min="5" max="90" value="24" aria-label="Fill opacity">
+          <label for="opacity">Fill opacity</label>
+          <input type="range" id="opacity" min="5" max="90" value="24">
           <output id="opacityval">24%</output>
         </div>
       </div>
@@ -122,7 +123,7 @@
         <h2>Export</h2>
         <div class="stack">
           <button class="ghost" id="dlvisible" type="button">Download visible coverage (GeoJSON)</button>
-          <button class="ghost" id="dlmeters" type="button">Download meters in current view (CSV)</button>
+          <button class="ghost" id="dlmeters" type="button">Download the households shown (CSV)</button>
           <button class="ghost" id="fitbtn" type="button">Reset view to rollout area</button>
         </div>
       </div>
@@ -131,15 +132,6 @@
     <div class="mapwrap">
       <div id="map"></div>
 
-      <aside class="brief" id="brief" hidden aria-labelledby="brieftitle">
-        <div class="briefhead">
-          <h2 id="brieftitle">What the coverage data says</h2>
-          <button class="briefclose" id="briefclose" type="button" title="Minimise to header" aria-label="Minimise to header">
-            <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 12h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-          </button>
-        </div>
-        <div class="briefbody"></div>
-      </aside>
     </div>
   </div>
 
@@ -147,7 +139,7 @@
     <span>CURSOR <span class="v" id="stcursor">—</span></span>
     <span>ZOOM <span class="v" id="stzoom">7</span></span>
     <span>COVERAGE <span class="v" id="stvis">6 of 6</span></span>
-    <span>METERS <span class="v" id="stmeters">—</span></span>
+    <span>HOUSEHOLDS <span class="v" id="stmeters">—</span></span>
     <span class="push" id="stsource"></span>
   </div>
 </div>
