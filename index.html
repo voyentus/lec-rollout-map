@@ -36,6 +36,8 @@
       <h1>Deployment Strategy System</h1>
     </div>
     <div class="spacer"></div>
+    <button class="maptoggle" id="feedertoggle" type="button" role="switch" aria-checked="false" title="Switch to the Feeder 01 map"><span class="track" aria-hidden="true"><i></i></span>Feeder 01 map</button>
+    <button class="maptoggle fddl" id="fddownload" type="button" hidden title="Download the Feeder 01 transformers and households as one CSV"><svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5v9M4.2 6.8 8 10.6l3.8-3.8M2 13.5h12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Download CSV</button>
     <div class="seg" id="basemaps" role="group" aria-label="Basemap"></div>
     <button class="iconbtn" id="themebtn" title="Toggle light / dark" aria-label="Toggle light or dark theme"><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 1.8a6.2 6.2 0 0 0 0 12.4z" fill="currentColor"/></svg></button>
     <span class="whoami" id="whoami"></span>
@@ -146,11 +148,35 @@
     <span>HOUSEHOLDS <span class="v" id="stmeters">—</span></span>
     <span class="push" id="stsource"></span>
   </div>
+
+  <!-- the Feeder 01 map: a second view over the main one, opened by the switch in the top bar -->
+  <div class="feederview" id="feederview" hidden>
+    <div class="mapwrap">
+      <div id="feedermap"></div>
+      <div class="feederdrop" id="fddrop">
+        <div class="gatecard">
+          <h1>Feeder 01 map</h1>
+          <p class="tag">Households from a CSV, nothing else</p>
+          <p class="loadmsg">Open a household CSV, such as the Feeder 01 file without outliers, to see it on the map. The file stays on this computer: nothing is uploaded, and it is only kept until this tab is closed.</p>
+          <label class="primary filebtn">Open CSV<input type="file" accept=".csv,text/csv" hidden></label>
+          <p class="msg" id="fddropmsg" role="alert"></p>
+        </div>
+      </div>
+    </div>
+    <div class="statusbar">
+      <span>FILE <span class="v" id="fdfile">—</span></span>
+      <span>HOUSEHOLDS <span class="v" id="fdcount">—</span></span>
+      <span class="swatchrow" id="fdkey"></span>
+      <label class="fdopen" id="fdopen" hidden>Open another CSV<input type="file" accept=".csv,text/csv" hidden></label>
+      <span class="push">CURSOR <span class="v" id="fdcursor">—</span></span>
+    </div>
+  </div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="config.js"></script>
 <script src="app.js"></script>
+<script src="feeder01.js"></script>
 </body>
 </html>
