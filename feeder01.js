@@ -156,13 +156,30 @@ dlBtn.onclick = () => {
     out.push(['transformer'].concat(row, t.n));
   });
   rows.forEach(r => out.push(['household'].concat(head.map((h, k) => r[k] || ''), tc !== -1 && trs.has(r[tc]) ? trs.get(r[tc]).n : '')));
-  const blob = new Blob([out.map(r => r.map(csvCell).join(',')).join('\n') + '\n'], { type: 'text/csv' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'feeder01_transformers_and_households.csv';
-  document.body.appendChild(a); a.click();
-  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+  saveCSV(out.map(r => r.map(csvCell).join(',')).join('\n') + '\n', 'feeder01_transformers_and_households.csv');
 };
+
+/* Save, not open. Where the browser has a real Save dialog (Chrome, Edge)
+   the user picks the folder and name. Elsewhere the file is handed over as
+   a plain download (octet-stream), which browsers save instead of offering
+   to open it in Numbers / Excel; the link is kept alive long enough for any
+   "where to save" prompt to finish. */
+function saveCSV(text, name){
+  if (window.showSaveFilePicker){
+    window.showSaveFilePicker({ suggestedName: name, types: [{ description: 'CSV file', accept: { 'text/csv': ['.csv'] } }] })
+      .then(h => h.createWritable()).then(w => w.write(text).then(() => w.close()))
+      .catch(e => { if (e.name !== 'AbortError') fallback(); });
+    return;
+  }
+  fallback();
+  function fallback(){
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: 'application/octet-stream' }));
+    a.download = name;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 60000);
+  }
+}
 
 /* the open file is kept for this tab only, so a reload does not mean opening
    it again; closing the tab forgets it */
