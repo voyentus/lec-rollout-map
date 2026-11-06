@@ -6,7 +6,10 @@
    out) can be checked on the map before it is accepted. Switching
    flips between the two views in place: no page load, so the main
    map, its data and the sign-in are left exactly as they were.
-   The file is read in the browser; nothing is sent anywhere.
+   It opens on the Feeder 01 households with the outliers taken out,
+   built from the database after sign-in (see below). "Open another CSV" swaps in a
+   file from this computer for this tab only; that file is read in the
+   browser and nothing is sent anywhere.
 ----------------------------------------------------------------*/
 (() => {
 const $ = id => document.getElementById(id);
@@ -27,6 +30,83 @@ function setView(on){
   if (!on) return;
   if (!map) makeMap(); else map.invalidateSize();
   setBasemap();
+  loadFeeder();
+}
+
+/* ---- the Feeder 01 households themselves ----
+   Built from the database the app already signs in to: every household
+   on a Feeder 01 transformer, less the 150 outliers taken out on
+   2026-11-05 (feeder01_outliers_removed.csv; IDs only, no locations).
+   The result is the same 9,058 rows, column for column, as
+   feeder01_households_no_outliers.csv. Distances use the flat-earth
+   approximation that file was made with (110,540 m per degree of
+   latitude, 111,320 m x cos(mid latitude) per degree of longitude). */
+const FEEDER = '22KV-PAYN-SUB-01', FEEDER_NAME = 'Feeder 01, outliers removed';
+const OUTLIERS = new Set([
+  905,912,2078,2082,2084,4293,4311,5086,5560,5569,5588,5593,5595,5598,5600,
+  5603,5628,10227,10524,11381,11405,13610,13686,14578,15552,15582,15615,
+  17434,18648,19337,20343,23088,31166,31193,31214,31258,31270,31311,31316,
+  31324,31337,31342,31361,31380,31394,31400,31424,31431,31452,31469,31477,
+  31490,31522,31532,31540,31584,31589,31638,31650,31661,31665,31682,31687,
+  31698,31708,31715,31720,31723,31725,31728,31731,31733,31787,31792,31810,
+  31818,31823,31829,31833,31841,31851,31861,31888,31907,31914,31924,31928,
+  31936,31942,31944,31951,31955,31972,32011,32024,32043,32079,32091,32109,
+  32113,32171,32197,32206,32223,32236,32250,32679,32688,32711,32721,32735,
+  32737,32743,32758,32764,32781,32791,32802,33218,34035,34047,34065,34375,
+  34393,34475,34494,34634,34636,34644,34653,34703,34712,35341,35861,37169,
+  37526,39010,39266,39267,39268,39269,39313,39485,41465,44342,45257,45705,
+  45799,45807,48620
+]);
+const HEAD = ['household_id', 'sp_id', 'lat', 'lng', 'transformer_code', 'transformer_name', 'transformer_lat', 'transformer_lng',
+  'feeder_no', 'feeder', 'status', 'installed_at', 'orange_gsm', 'orange_3g', 'orange_lte', 'lonestar_gsm', 'lonestar_3g', 'lonestar_lte',
+  'dist_to_own_transformer_m', 'dist_to_nearest_feeder_transformer_m'];
+const metres = (a, b, c, d) => Math.hypot((c - a) * 110540, (d - b) * 111320 * Math.cos((a + c) / 2 * Math.PI / 180));
+const txt = v => v === null || v === undefined ? '' : String(v);
+
+let sb = null, trList = null, fetching = false;
+window.feeder01 = { attach(client, transformers){ sb = client; trList = transformers || []; if (!view.hidden) loadFeeder(); } };
+
+async function feederRows(){
+  const trs = trList.filter(t => t.feeder === FEEDER);
+  if (!trs.length) throw new Error('No Feeder 01 transformers were found.');
+  const byCode = new Map(trs.map(t => [t.code, t]));
+  const hh = [];
+  for (let from = 0; ; from += 1000){
+    const { data, error } = await sb.from('households')
+      .select('id,sp_id,lat,lng,transformer_code,has_meter,installed_at,cov')
+      .in('transformer_code', trs.map(t => t.code)).order('id').range(from, from + 999);
+    if (error) throw error;
+    hh.push.apply(hh, data);
+    if (data.length < 1000) break;
+  }
+  const feederNo = (FEEDER.match(/(\d+)$/) || ['', ''])[1];
+  const rows = [HEAD];
+  hh.forEach(h => {
+    if (OUTLIERS.has(Number(h.id))) return;
+    const t = byCode.get(h.transformer_code);
+    let near = Infinity;
+    trs.forEach(x => { near = Math.min(near, metres(h.lat, h.lng, x.lat, x.lng)); });
+    rows.push([txt(h.id), txt(h.sp_id), txt(h.lat), txt(h.lng), h.transformer_code, txt(t.name), txt(t.lat), txt(t.lng),
+      feederNo, FEEDER, h.has_meter ? 'existing_meter' : 'no_meter', txt(h.installed_at)]
+      .concat([1, 2, 4, 8, 16, 32].map(b => h.cov & b ? '1' : '0'))
+      .concat(String(Math.round(metres(h.lat, h.lng, t.lat, t.lng))), String(Math.round(near))));
+  });
+  return rows;
+}
+function loadFeeder(){
+  if (shown || fetching || !sb || !sb.from || !trList) return;
+  fetching = true;
+  dropState('Loading the Feeder 01 households…', '');
+  feederRows()
+    .then(rows => { if (!shown) showRows(FEEDER_NAME, rows); })
+    .catch(e => dropState('', 'Could not load the Feeder 01 households. ' + (e.message || e) + ' You can open a CSV from this computer instead.'))
+    .finally(() => { fetching = false; });
+}
+function dropState(loading, error){
+  $('fddrop').hidden = false;
+  $('fdloading').hidden = !loading; $('fdloading').textContent = loading;
+  $('fdpick').hidden = !!loading;
+  $('fddropmsg').textContent = error;
 }
 toggle.onclick = () => setView(view.hidden);
 
@@ -90,8 +170,9 @@ const STATUS = { existing_meter: 'existing meter', no_meter: 'not yet metered' }
 const popTable = (head, r) => '<table class="feederpop">' +
   head.map((h, k) => r[k] ? '<tr><th>' + esc(h) + '</th><td>' + esc(r[k]) + '</td></tr>' : '').join('') + '</table>';
 
-function show(name, text){
-  const rows = parseCSV(text);
+function show(name, text){ showRows(name, parseCSV(text)); }
+function showRows(name, rows){
+  rows = rows.slice();
   const head = (rows.shift() || []).map(h => h.trim().toLowerCase());
   const la = head.indexOf('lat'), ln = head.indexOf('lng') !== -1 ? head.indexOf('lng') : head.indexOf('lon');
   const st = head.indexOf('status');
@@ -100,7 +181,9 @@ function show(name, text){
         tla = head.indexOf('transformer_lat'), tln = head.indexOf('transformer_lng');
   points.clearLayers(); sites.clearLayers();
   const counts = {}, trs = new Map(), kept = []; let skipped = 0;
+  const rt = head.indexOf('record_type');
   rows.forEach(r => {
+    if (rt !== -1 && r[rt] === 'transformer') return;
     const lat = parseFloat(r[la]), lng = parseFloat(r[ln]);
     if (!isFinite(lat) || !isFinite(lng)) { skipped++; return; }
     kept.push(r);
@@ -192,10 +275,8 @@ function keep(name, text){
 function open(file){
   if (!file) return;
   $('fddropmsg').textContent = '';
-  file.text().then(text => { show(file.name, text); keep(file.name, text); }).catch(e => {
-    $('fddrop').hidden = false;
-    $('fddropmsg').textContent = e.message || String(e);
-  });
+  file.text().then(text => { show(file.name, text); keep(file.name, text); })
+    .catch(e => dropState('', e.message || String(e)));
 }
 view.querySelectorAll('input[type=file]').forEach(inp => {
   inp.onchange = () => { open(inp.files[0]); inp.value = ''; };

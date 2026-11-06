@@ -100,6 +100,8 @@ async function boot(){
 function startApp(data, user, sb){
 const COVERAGE = data.COVERAGE, METERS = data.METERS;
 $('whoami').textContent = user ? user.email : '';
+/* the Feeder 01 view builds its households from the same database */
+if (window.feeder01) window.feeder01.attach(sb, METERS.transformers);
 $('signout').onclick = async () => {
   try { await pushChain; } catch (e) {}
   signOut();

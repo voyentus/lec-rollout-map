@@ -156,9 +156,12 @@
       <div class="feederdrop" id="fddrop">
         <div class="gatecard">
           <h1>Feeder 01 map</h1>
-          <p class="tag">Households from a CSV, nothing else</p>
-          <p class="loadmsg">Open a household CSV, such as the Feeder 01 file without outliers, to see it on the map. The file stays on this computer: nothing is uploaded, and it is only kept until this tab is closed.</p>
-          <label class="primary filebtn">Open CSV<input type="file" accept=".csv,text/csv" hidden></label>
+          <p class="tag">Feeder 01 households, outliers removed</p>
+          <p class="loadmsg" id="fdloading">Loading the Feeder 01 households…</p>
+          <div id="fdpick" hidden>
+            <p class="loadmsg">Open a household CSV from this computer to see it on the map. It stays on this computer and is only kept until this tab is closed.</p>
+            <label class="primary filebtn">Open CSV<input type="file" accept=".csv,text/csv" hidden></label>
+          </div>
           <p class="msg" id="fddropmsg" role="alert"></p>
         </div>
       </div>
