@@ -6,7 +6,7 @@
    out) can be checked on the map before it is accepted. Switching
    flips between the two views in place: no page load, so the main
    map, its data and the sign-in are left exactly as they were.
-   It opens on the Feeder 01 households with the outliers taken out,
+   It opens on all the Feeder 01 households,
    built from the database after sign-in (see below). "Open another CSV" swaps in a
    file from this computer for this tab only; that file is read in the
    browser and nothing is sent anywhere.
@@ -35,31 +35,13 @@ function setView(on){
 
 /* ---- the Feeder 01 households themselves ----
    Built from the database the app already signs in to: every household
-   on a Feeder 01 transformer, less the 150 outliers taken out on
-   2026-11-05 (feeder01_outliers_removed.csv; IDs only, no locations)
-   and 6 more from the 2026-11-10 LECMS refresh that fit the same
-   pattern (2.7 to 23 km from any Feeder 01 transformer, beside a
-   Feeder 02 or 03 one). On the September data the result is the same
-   9,058 rows, column for column, as feeder01_households_no_outliers.csv. Distances use the flat-earth
-   approximation that file was made with (110,540 m per degree of
-   latitude, 111,320 m x cos(mid latitude) per degree of longitude). */
-const FEEDER = '22KV-PAYN-SUB-01', FEEDER_NAME = 'Feeder 01, outliers removed';
-const OUTLIERS = new Set([
-  905,912,2078,2082,2084,4293,4311,5086,5560,5569,5588,5593,5595,5598,5600,
-  5603,5628,10227,10524,11381,11405,13610,13686,14578,15552,15582,15615,
-  17434,18648,19337,20343,23088,31166,31193,31214,31258,31270,31311,31316,
-  31324,31337,31342,31361,31380,31394,31400,31424,31431,31452,31469,31477,
-  31490,31522,31532,31540,31584,31589,31638,31650,31661,31665,31682,31687,
-  31698,31708,31715,31720,31723,31725,31728,31731,31733,31787,31792,31810,
-  31818,31823,31829,31833,31841,31851,31861,31888,31907,31914,31924,31928,
-  31936,31942,31944,31951,31955,31972,32011,32024,32043,32079,32091,32109,
-  32113,32171,32197,32206,32223,32236,32250,32679,32688,32711,32721,32735,
-  32737,32743,32758,32764,32781,32791,32802,33218,34035,34047,34065,34375,
-  34393,34475,34494,34634,34636,34644,34653,34703,34712,35341,35861,37169,
-  37526,39010,39266,39267,39268,39269,39313,39485,41465,44342,45257,45705,
-  45799,45807,48620,
-  52642,54241,55057,55116,55416,55488
-]);
+   on a Feeder 01 transformer, with nothing left out. (Until 2026-11-10 a
+   fixed list of 156 far-off households was hidden; that list is in the
+   git history and in feeder01_outliers_removed.csv outside the repo.)
+   Distances use the flat-earth approximation of the 2026-11-05 export
+   (110,540 m per degree of latitude, 111,320 m x cos(mid latitude) per
+   degree of longitude). */
+const FEEDER = '22KV-PAYN-SUB-01', FEEDER_NAME = 'Feeder 01, all households';
 const HEAD = ['household_id', 'sp_id', 'lat', 'lng', 'transformer_code', 'transformer_name', 'transformer_lat', 'transformer_lng',
   'feeder_no', 'feeder', 'status', 'installed_at', 'orange_gsm', 'orange_3g', 'orange_lte', 'lonestar_gsm', 'lonestar_3g', 'lonestar_lte',
   'dist_to_own_transformer_m', 'dist_to_nearest_feeder_transformer_m'];
@@ -85,7 +67,6 @@ async function feederRows(){
   const feederNo = (FEEDER.match(/(\d+)$/) || ['', ''])[1];
   const rows = [HEAD];
   hh.forEach(h => {
-    if (OUTLIERS.has(Number(h.id))) return;
     const t = byCode.get(h.transformer_code);
     let near = Infinity;
     trs.forEach(x => { near = Math.min(near, metres(h.lat, h.lng, x.lat, x.lng)); });
