@@ -538,8 +538,22 @@ dlBtn.onclick = () => {
   });
   vis.forEach(h => out.push(['household'].concat(rowOf(h), tc !== -1 && TRS.has(h.r[tc]) ? TRS.get(h.r[tc]).n : '',
     anyMoved ? (h.moved ? [h.lat0.toFixed(7), h.lng0.toFixed(7)] : ['', '']) : [])));
-  saveCSV(out.map(r => r.map(csvCell).join(',')).join('\n') + '\n', 'feeder01_transformers_and_households.csv');
+  /* a name of its own each time (date, time, how many households), so a fresh
+     download is never confused with an older file in the Downloads folder */
+  const now = new Date(), p2 = n => String(n).padStart(2, '0');
+  const stamp = now.getFullYear() + '-' + p2(now.getMonth() + 1) + '-' + p2(now.getDate()) + '_' + p2(now.getHours()) + p2(now.getMinutes());
+  const fname = 'feeder01_' + stamp + '_' + vis.length + '-households' + (vis.length < HH.length ? '_' + (HH.length - vis.length) + '-hidden' : '') + '.csv';
+  saveCSV(out.map(r => r.map(csvCell).join(',')).join('\n') + '\n', fname);
+  const nHid = HH.length - vis.length, nMov = vis.filter(h => h.moved).length;
+  notice('Saved ' + fname + ': ' + fmt(vis.length) + ' households' +
+    (nHid ? ', ' + fmt(nHid) + ' hidden left out' : '') + (nMov ? ', ' + fmt(nMov) + ' at their moved position' : '') + '.');
 };
+let noticeTimer = 0;
+function notice(text){
+  const n = $('fdnotice');
+  n.textContent = text; n.hidden = false;
+  clearTimeout(noticeTimer); noticeTimer = setTimeout(() => { n.hidden = true; }, 9000);
+}
 
 /* Save, not open. Where the browser has a real Save dialog (Chrome, Edge)
    the user picks the folder and name. Elsewhere the file is handed over as

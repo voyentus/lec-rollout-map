@@ -354,3 +354,8 @@ canvas.meter-canvas{position:absolute;left:0;top:0;pointer-events:none}
 .hhpop .hhhide{margin-top:8px;width:100%}
 .fdundo[hidden]{display:none}
 .fdundo:disabled{opacity:.4;cursor:default}
+.fdnotice{
+  position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:1000;max-width:calc(100% - 40px);
+  padding:8px 12px;border-radius:6px;background:var(--ink);color:var(--surface);font-size:12.5px;box-shadow:var(--shadow);
+}
+.fdnotice[hidden]{display:none}
