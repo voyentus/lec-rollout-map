@@ -36,9 +36,11 @@ function setView(on){
 /* ---- the Feeder 01 households themselves ----
    Built from the database the app already signs in to: every household
    on a Feeder 01 transformer, less the 150 outliers taken out on
-   2026-11-05 (feeder01_outliers_removed.csv; IDs only, no locations).
-   The result is the same 9,058 rows, column for column, as
-   feeder01_households_no_outliers.csv. Distances use the flat-earth
+   2026-11-05 (feeder01_outliers_removed.csv; IDs only, no locations)
+   and 6 more from the 2026-11-10 LECMS refresh that fit the same
+   pattern (2.7 to 23 km from any Feeder 01 transformer, beside a
+   Feeder 02 or 03 one). On the September data the result is the same
+   9,058 rows, column for column, as feeder01_households_no_outliers.csv. Distances use the flat-earth
    approximation that file was made with (110,540 m per degree of
    latitude, 111,320 m x cos(mid latitude) per degree of longitude). */
 const FEEDER = '22KV-PAYN-SUB-01', FEEDER_NAME = 'Feeder 01, outliers removed';
@@ -55,7 +57,8 @@ const OUTLIERS = new Set([
   32737,32743,32758,32764,32781,32791,32802,33218,34035,34047,34065,34375,
   34393,34475,34494,34634,34636,34644,34653,34703,34712,35341,35861,37169,
   37526,39010,39266,39267,39268,39269,39313,39485,41465,44342,45257,45705,
-  45799,45807,48620
+  45799,45807,48620,
+  52642,54241,55057,55116,55416,55488
 ]);
 const HEAD = ['household_id', 'sp_id', 'lat', 'lng', 'transformer_code', 'transformer_name', 'transformer_lat', 'transformer_lng',
   'feeder_no', 'feeder', 'status', 'installed_at', 'orange_gsm', 'orange_3g', 'orange_lte', 'lonestar_gsm', 'lonestar_3g', 'lonestar_lte',

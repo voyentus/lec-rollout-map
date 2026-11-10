@@ -53,7 +53,7 @@ async function loadData(sb){
   const q = async p => { const { data, error } = await p; if (error) throw error; return data; };
   const [hh, tr, cov, meta] = await Promise.all([
     q(sb.rpc('households_packed')),
-    q(sb.from('transformers').select('code,idx,name,feeder,lat,lng').order('idx')),
+    q(sb.from('transformers').select('*').order('idx')),   /* '*' so older databases without the LECMS detail columns still load */
     q(sb.storage.from('app-data').download('coverage.json')).then(blob => blob.text()).then(JSON.parse),
     q(sb.from('app_meta').select('key,value'))
   ]);
@@ -62,7 +62,8 @@ async function loadData(sb){
   const m = {};
   meta.forEach(r => { m[r.key] = r.value; });
   const pos = new Map(tr.map((t, i) => [t.idx, i]));
-  const transformers = tr.map(t => ({ code: t.code, name: t.name, feeder: t.feeder, lat: t.lat, lng: t.lng, n: 0, ex: 0, no3g: 0 }));
+  const transformers = tr.map(t => ({ code: t.code, name: t.name, feeder: t.feeder, lat: t.lat, lng: t.lng,
+    kva: t.kva, status: t.status, condition: t.condition, community: t.community, n: 0, ex: 0, no3g: 0 }));
   const n = hh.n;
   const flags = Uint8Array.from(hh.cov), status = Uint8Array.from(hh.met);
   const tidx = Uint16Array.from(hh.tr, v => pos.get(v));
@@ -734,6 +735,13 @@ document.getElementById('asof').textContent =
 /* ---- transformers and substation ---- */
 const trLayer = L.layerGroup();
 const trRadius = t => Math.max(4, Math.min(16, Math.sqrt(t.n) * 0.75));
+/* LECMS asset details (size, status, condition, community), where recorded */
+const trHtml = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const trWord = s => s ? s.charAt(0) + s.slice(1).toLowerCase().replace(/_/g, ' ') : '';
+function trDetails(t){
+  const bits = [t.kva ? t.kva + ' kVA' : '', trWord(t.status), t.condition ? trWord(t.condition) + ' condition' : ''].filter(Boolean);
+  return (t.community ? '<br>' + trHtml(t.community) : '') + (bits.length ? '<br>' + bits.join(' &middot; ') : '');
+}
 METERS.transformers.forEach((t, k) => {
   const share = t.n ? t.no3g / t.n : 0;
   const f = FEEDERS[trFeeder[k]];
@@ -741,10 +749,10 @@ METERS.transformers.forEach((t, k) => {
     radius: trRadius(t),
     color: f.color, weight: 1.8, fillColor: f.color, fillOpacity: 0.3
   }).bindPopup(
-    '<b>' + (t.name || t.code) + '</b><br>' + t.code +
-    '<br>' + f.name + (t.feeder ? ' &middot; ' + t.feeder : '') +
+    '<b>' + trHtml(t.name || t.code) + '</b><br>' + t.code +
+    '<br>' + f.name + (t.feeder ? ' &middot; ' + t.feeder : '') + trDetails(t) +
     '<br>' + t.n + ' households, ' + t.ex + ' metered' +
-    '<br>' + t.no3g + ' with no 3G (' + Math.round(share * 100) + '%)'
+    (t.n ? '<br>' + t.no3g + ' with no 3G (' + Math.round(share * 100) + '%)' : '')
   ).addTo(f.group);
 });
 FEEDERS.forEach(f => { if (f.on) trLayer.addLayer(f.group); });
