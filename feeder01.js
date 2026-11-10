@@ -25,7 +25,7 @@ let map = null, shown = null;      /* shown: the file on the map, for the downlo
 function setView(on){
   view.hidden = !on;
   dlBtn.hidden = !on || !shown;
-  tools.hidden = !on;
+  tools.hidden = !on; undoBtn.hidden = !on;
   toggle.setAttribute('aria-checked', String(on));
   toggle.title = on ? 'Switch back to the main map' : 'Switch to the Feeder 01 map';
   if (!on) return;
@@ -268,7 +268,7 @@ function showRows(name, rows, allTrs){
   const tn = head.indexOf('transformer_name'), tla = head.indexOf('transformer_lat'), tln = head.indexOf('transformer_lng');
   const idc = head.indexOf('household_id'), rt = head.indexOf('record_type');
   points.clearLayers(); sites.clearLayers();
-  fileName = name; HH = []; TRS = new Map(); skippedRows = 0;
+  fileName = name; HH = []; TRS = new Map(); skippedRows = 0; history = [];
   rows.forEach((r, i) => {
     if (rt !== -1 && r[rt] === 'transformer') return;
     const lat = parseFloat(r[colLa]), lng = parseFloat(r[colLn]);
@@ -337,8 +337,41 @@ function refresh(){
 }
 
 /* ---- tools: pan / select / box select / move ---- */
-const tools = $('fdtools');
+const tools = $('fdtools'), undoBtn = $('fdundo');
 let tool = 'pan', drag = null, box = null;
+
+/* ---- undo ----
+   Before every hide, move, "Show all" or "Put back" the hidden and moved
+   households are noted; Undo (the button, or Ctrl+Z / Cmd+Z) goes back
+   one step. The steps last until the page is reloaded or another file is
+   opened. */
+let history = [];
+const snapshot = () => {
+  const moved = {}; HH.forEach(h => { if (h.moved) moved[h.key] = [h.lat, h.lng]; });
+  return { hidden: new Set(HH.filter(h => h.hidden).map(h => h.key)), moved: moved };
+};
+function remember(){ history.push(snapshot()); if (history.length > 100) history.shift(); }
+function undo(){
+  const st = history.pop();
+  if (!st) return;
+  map.closePopup();
+  HH.forEach(h => {
+    const m = st.moved[h.key], hidden = st.hidden.has(h.key);
+    const lat = m ? m[0] : h.lat0, lng = m ? m[1] : h.lng0;
+    const posChanged = lat !== h.lat || lng !== h.lng, wasHidden = h.hidden, wasSel = h.selected;
+    h.hidden = hidden; h.selected = h.selected && !hidden;
+    if (posChanged || !!m !== h.moved){
+      h.lat = lat; h.lng = lng; h.moved = !!m;
+      h.r = h.moved ? movedRow(h) : h.r0;
+      h.marker.setLatLng([lat, lng]);
+    }
+    if (posChanged || wasHidden !== hidden || wasSel !== h.selected) h.marker.setStyle(hhStyle(h));
+    if (hidden && !wasHidden) points.removeLayer(h.marker);
+    if (!hidden && wasHidden) h.marker.addTo(points);
+  });
+  saveEdits(); refresh();
+}
+undoBtn.onclick = undo;
 const HINTS = {
   pan: '',
   select: 'Click households to select or unselect them.',
@@ -367,6 +400,8 @@ function updateBar(){
   $('fdhid').hidden = !nHid; $('fdhidn').textContent = fmt(nHid);
   $('fdmov').hidden = !nMov; $('fdmovn').textContent = fmt(nMov);
   $('fdbar').hidden = !(HINTS[tool] || nSel || nHid || nMov);
+  undoBtn.disabled = !history.length;
+  undoBtn.title = history.length ? 'Undo the last hide or move (Ctrl+Z / ⌘Z)' : 'Nothing to undo yet';
 }
 
 function onHouseholdClick(h, e){
@@ -393,23 +428,29 @@ function popupFor(h){
 }
 
 function hide(list){
+  if (!list.length) return;
+  remember();
   list.forEach(h => { h.hidden = true; h.selected = false; h.marker.setStyle(hhStyle(h)); points.removeLayer(h.marker); });
   saveEdits(); refresh();
 }
 function putBack(list){
+  if (!list.length) return;
+  remember();
   list.forEach(h => { h.lat = h.lat0; h.lng = h.lng0; h.moved = false; h.r = h.r0; h.marker.setLatLng([h.lat, h.lng]); h.marker.setStyle(hhStyle(h)); });
   saveEdits(); refresh();
 }
 $('fdhide').onclick = () => hide(selected());
 $('fdclear').onclick = () => { HH.forEach(h => setSelected(h, false)); updateBar(); };
 $('fdunhide').onclick = () => {
+  remember();
   HH.forEach(h => { if (h.hidden){ h.hidden = false; h.marker.setStyle(hhStyle(h)); h.marker.addTo(points); } });
   saveEdits(); refresh();
 };
 $('fdunmove').onclick = () => putBack(HH.filter(h => h.moved));
 document.addEventListener('keydown', e => {
   if (view.hidden || /^(INPUT|TEXTAREA|SELECT)$/.test((e.target || {}).tagName || '')) return;
-  if ((e.key === 'Delete' || e.key === 'Backspace') && selected().length) { e.preventDefault(); hide(selected()); }
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); }
+  else if ((e.key === 'Delete' || e.key === 'Backspace') && selected().length) { e.preventDefault(); hide(selected()); }
   else if (e.key === 'Escape') { if (selected().length) { HH.forEach(h => setSelected(h, false)); updateBar(); } else setTool('pan'); }
 });
 
@@ -434,6 +475,7 @@ function onDragEnd(e){
   if (e && e.clientX !== undefined) onDragMove({ latlng: map.mouseEventToLatLng(e) });   /* land exactly where the mouse let go */
   const d = drag; drag = null;
   if (!d.movedAny) return;
+  remember();                /* positions in HH are still the old ones here */
   d.group.forEach(g => {
     const ll = g.h.marker.getLatLng();
     g.h.lat = ll.lat; g.h.lng = ll.lng;
