@@ -7,6 +7,8 @@ This repository holds only the app's code. All data lives in a Supabase database
 and is loaded after sign-in; accounts are created by the project owner.
 
 - `index.html`, `styles.css`, `app.js`: the app (no build step)
-- `feeder01.js`: the Feeder 01 map, a second view behind the switch in the top bar that shows
-  a household CSV opened on the user's computer (the file is never uploaded)
+- `feeder01.js`: the Feeder 01 map, a second view behind the switch in the top bar: every Feeder 01
+  household and transformer, with tools to select (click or drag a box), hide and move households.
+  Hidden ones leave the counts and the CSV download; moved ones download at their new spot. These
+  edits stay in the user's browser.
 - `config.js`: the Supabase project address and its publishable key

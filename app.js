@@ -102,7 +102,11 @@ function startApp(data, user, sb){
 const COVERAGE = data.COVERAGE, METERS = data.METERS;
 $('whoami').textContent = user ? user.email : '';
 /* the Feeder 01 view builds its households from the same database */
-if (window.feeder01) window.feeder01.attach(sb, METERS.transformers);
+/* and asks for the coverage bits (see BIT below) at a spot when a household is moved there */
+const COV_BIT = { 'Orange|GSM': 1, 'Orange|3G': 2, 'Orange|LTE': 4, 'LonestarCell MTN|GSM': 8, 'LonestarCell MTN|3G': 16, 'LonestarCell MTN|LTE': 32 };
+const coverageAt = (lat, lng) => COVERAGE.features.reduce((b, f) =>
+  b | (covers(f.geometry, lng, lat) ? COV_BIT[f.properties.operator + '|' + f.properties.technology] || 0 : 0), 0);
+if (window.feeder01) window.feeder01.attach(sb, METERS.transformers, coverageAt);
 $('signout').onclick = async () => {
   try { await pushChain; } catch (e) {}
   signOut();

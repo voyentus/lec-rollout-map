@@ -25,6 +25,7 @@ let map = null, shown = null;      /* shown: the file on the map, for the downlo
 function setView(on){
   view.hidden = !on;
   dlBtn.hidden = !on || !shown;
+  tools.hidden = !on;
   toggle.setAttribute('aria-checked', String(on));
   toggle.title = on ? 'Switch back to the main map' : 'Switch to the Feeder 01 map';
   if (!on) return;
@@ -48,8 +49,8 @@ const HEAD = ['household_id', 'sp_id', 'lat', 'lng', 'transformer_code', 'transf
 const metres = (a, b, c, d) => Math.hypot((c - a) * 110540, (d - b) * 111320 * Math.cos((a + c) / 2 * Math.PI / 180));
 const txt = v => v === null || v === undefined ? '' : String(v);
 
-let sb = null, trList = null, fetching = false;
-window.feeder01 = { attach(client, transformers){ sb = client; trList = transformers || []; if (!view.hidden) loadFeeder(); } };
+let sb = null, trList = null, fetching = false, coverageAt = null;
+window.feeder01 = { attach(client, transformers, covAt){ sb = client; trList = transformers || []; coverageAt = covAt || coverageAt; if (!view.hidden) loadFeeder(); } };
 
 async function feederRows(){
   const trs = trList.filter(t => t.feeder === FEEDER);
@@ -115,6 +116,7 @@ function setBasemap(){
 $('basemaps').addEventListener('click', () => { if (!view.hidden) setBasemap(); });
 
 const points = L.featureGroup(), sites = L.featureGroup();
+const wrap = view.querySelector('.mapwrap');
 function makeMap(){
   map = L.map('feedermap', { zoomControl: true, minZoom: 5, zoomSnap: 0.5, zoomDelta: 0.5, preferCanvas: true })
          .setView([6.30, -10.72], 12);
@@ -209,41 +211,111 @@ function householdPopup(head, r){
 }
 
 function show(name, text){ showRows(name, parseCSV(text)); }
-/* allTrs: for the database view, every transformer on the feeder, so the
-   ones with no households on this map are drawn too (hollow, 0 households) */
+
+/* ---- what is on the map ----
+   Each household is one marker. The user can hide households (they leave
+   the map, the counts and the download) or move them (drawn at the new
+   spot, downloaded with the new lat / lng and their old one alongside).
+   Those edits are kept in this browser per file, so a reload keeps them;
+   "Show all" and "Put all back" undo them. */
+const SEL = '#FF8A00', MOVED = '#8B3FD1';
+const EDITS = 'lce.feeder01.edits';
+let HH = [], TRS = new Map(), TRINFO = new Map(), skippedRows = 0, fileName = '', head = [];
+let colLa = -1, colLn = -1, colSt = -1, colTc = -1;
+const hhStyle = h => h.selected
+  ? { radius: 5, color: '#0E1719', weight: 1.5, opacity: 1, fillColor: SEL, fillOpacity: 1 }
+  : h.moved
+    ? { radius: 4, color: '#fff', weight: 1, opacity: 1, fillColor: MOVED, fillOpacity: 1 }
+    : { radius: 3, color: '#fff', weight: 0.6, opacity: 0.8, fillColor: BLUE, fillOpacity: 0.9 };
+function loadEdits(){ try { return (JSON.parse(localStorage.getItem(EDITS) || '{}') || {})[fileName] || {}; } catch (e) { return {}; } }
+function saveEdits(){
+  try {
+    const all = JSON.parse(localStorage.getItem(EDITS) || '{}') || {};
+    const hidden = HH.filter(h => h.hidden).map(h => h.key);
+    const moved = {}; HH.forEach(h => { if (h.moved) moved[h.key] = [h.lat, h.lng]; });
+    if (hidden.length || Object.keys(moved).length) all[fileName] = { hidden: hidden, moved: moved }; else delete all[fileName];
+    localStorage.setItem(EDITS, JSON.stringify(all));
+  } catch (e) {}
+}
+
+/* the row of a moved household as it reads at its new spot: new lat / lng,
+   distances to its transformer and the nearest feeder transformer worked out
+   again, and mobile coverage looked up there (when the main map can say) */
+function movedRow(h){
+  const r = h.r0.slice(), col = n => head.indexOf(n);
+  r[colLa] = h.lat.toFixed(7); r[colLn] = h.lng.toFixed(7);
+  const t = colTc !== -1 && TRS.get(h.r0[colTc]);
+  if (t && isFinite(t.lat) && col('dist_to_own_transformer_m') !== -1)
+    r[col('dist_to_own_transformer_m')] = String(Math.round(metres(h.lat, h.lng, t.lat, t.lng)));
+  const feederTrs = [...TRS.values()].filter(x => isFinite(x.lat) && isFinite(x.lng));
+  if (col('dist_to_nearest_feeder_transformer_m') !== -1 && feederTrs.length)
+    r[col('dist_to_nearest_feeder_transformer_m')] = String(Math.round(Math.min.apply(null, feederTrs.map(x => metres(h.lat, h.lng, x.lat, x.lng)))));
+  if (coverageAt){
+    const bits = coverageAt(h.lat, h.lng);
+    ['orange_gsm', 'orange_3g', 'orange_lte', 'lonestar_gsm', 'lonestar_3g', 'lonestar_lte'].forEach((c, i) => {
+      if (col(c) !== -1) r[col(c)] = bits & (1 << i) ? '1' : '0';
+    });
+  }
+  return r;
+}
+
 function showRows(name, rows, allTrs){
   rows = rows.slice();
-  const head = (rows.shift() || []).map(h => h.trim().toLowerCase());
-  const la = head.indexOf('lat'), ln = head.indexOf('lng') !== -1 ? head.indexOf('lng') : head.indexOf('lon');
-  const st = head.indexOf('status');
-  if (la === -1 || ln === -1) throw new Error('The file needs "lat" and "lng" columns.');
-  const tc = head.indexOf('transformer_code'), tn = head.indexOf('transformer_name'),
-        tla = head.indexOf('transformer_lat'), tln = head.indexOf('transformer_lng');
+  head = (rows.shift() || []).map(h => h.trim().toLowerCase());
+  colLa = head.indexOf('lat'); colLn = head.indexOf('lng') !== -1 ? head.indexOf('lng') : head.indexOf('lon');
+  colSt = head.indexOf('status'); colTc = head.indexOf('transformer_code');
+  if (colLa === -1 || colLn === -1) throw new Error('The file needs "lat" and "lng" columns.');
+  const tn = head.indexOf('transformer_name'), tla = head.indexOf('transformer_lat'), tln = head.indexOf('transformer_lng');
+  const idc = head.indexOf('household_id'), rt = head.indexOf('record_type');
   points.clearLayers(); sites.clearLayers();
-  const counts = {}, trs = new Map(), kept = []; let skipped = 0;
-  const rt = head.indexOf('record_type');
-  rows.forEach(r => {
+  fileName = name; HH = []; TRS = new Map(); skippedRows = 0;
+  rows.forEach((r, i) => {
     if (rt !== -1 && r[rt] === 'transformer') return;
-    const lat = parseFloat(r[la]), lng = parseFloat(r[ln]);
-    if (!isFinite(lat) || !isFinite(lng)) { skipped++; return; }
-    kept.push(r);
-    const s = STATUS[r[st]];
-    if (s) counts[s] = (counts[s] || 0) + 1;
-    if (tc !== -1 && tla !== -1 && tln !== -1 && r[tc]){
-      const t = trs.get(r[tc]) || { lat: parseFloat(r[tla]), lng: parseFloat(r[tln]), name: tn !== -1 ? r[tn] : '', n: 0 };
-      t.n++; trs.set(r[tc], t);
-    }
-    L.circleMarker([lat, lng], { radius: 3, color: '#fff', weight: 0.6, opacity: 0.8, fillColor: BLUE, fillOpacity: 0.9 })
-      .bindPopup(() => householdPopup(head, r), { maxWidth: 300 })
-      .addTo(points);
+    const lat = parseFloat(r[colLa]), lng = parseFloat(r[colLn]);
+    if (!isFinite(lat) || !isFinite(lng)) { skippedRows++; return; }
+    if (colTc !== -1 && tla !== -1 && tln !== -1 && r[colTc] && !TRS.has(r[colTc]))
+      TRS.set(r[colTc], { lat: parseFloat(r[tla]), lng: parseFloat(r[tln]), name: tn !== -1 ? r[tn] : '', n: 0 });
+    HH.push({ r: r, r0: r, key: idc !== -1 && r[idc] ? 'id' + r[idc] : 'row' + i, lat0: lat, lng0: lng, lat: lat, lng: lng,
+              hidden: false, moved: false, selected: false });
   });
-  const info = new Map((allTrs || []).map(t => [t.code, t]));
-  info.forEach((t, code) => { if (!trs.has(code)) trs.set(code, { lat: t.lat, lng: t.lng, name: t.name || '', n: 0 }); });
-  let empty = 0;
-  trs.forEach((t, code) => {
+  TRINFO = new Map((allTrs || []).map(t => [t.code, t]));
+  TRINFO.forEach((t, code) => { if (!TRS.has(code)) TRS.set(code, { lat: t.lat, lng: t.lng, name: t.name || '', n: 0 }); });
+  if (!HH.length) throw new Error('No rows with a location were found in this file.');
+
+  const ed = loadEdits(), hiddenSet = new Set(ed.hidden || []), moved = ed.moved || {};
+  HH.forEach(h => {
+    if (hiddenSet.has(h.key)) h.hidden = true;
+    const m = moved[h.key];
+    if (m && isFinite(m[0]) && isFinite(m[1])) { h.lat = m[0]; h.lng = m[1]; h.moved = true; }
+    if (h.moved) h.r = movedRow(h);
+    h.marker = L.circleMarker([h.lat, h.lng], hhStyle(h));
+    h.marker.on('click', e => onHouseholdClick(h, e));
+    h.marker.on('mousedown', e => onHouseholdDown(h, e));
+    if (!h.hidden) h.marker.addTo(points);
+  });
+  map.fitBounds(L.latLngBounds(HH.filter(h => !h.hidden).map(h => [h.lat, h.lng]).concat(HH.length ? [] : [[6.3, -10.7]])), { padding: [24, 24] });
+  $('fdfile').textContent = name;
+  $('fddrop').hidden = true;
+  $('fdopen').hidden = false;
+  shown = { name: name };
+  dlBtn.hidden = view.hidden;
+  refresh();
+}
+
+/* counts, legend, transformers and the action bar, from the current state */
+function refresh(){
+  const vis = HH.filter(h => !h.hidden), counts = {};
+  TRS.forEach(t => { t.n = 0; });
+  vis.forEach(h => {
+    const s = STATUS[h.r[colSt]]; if (s) counts[s] = (counts[s] || 0) + 1;
+    const t = colTc !== -1 && TRS.get(h.r[colTc]); if (t) t.n++;
+  });
+  sites.clearLayers();
+  let empty = 0, drawn = 0;
+  TRS.forEach((t, code) => {
     if (!isFinite(t.lat) || !isFinite(t.lng)) return;
-    const d = info.get(code) || {};
-    if (!t.n) empty++;
+    const d = TRINFO.get(code) || {};
+    drawn++; if (!t.n) empty++;
     L.circleMarker([t.lat, t.lng], t.n
       ? { radius: 7, color: EDGE, weight: 1.5, fillColor: YELLOW, fillOpacity: 1 }
       : { radius: 6, color: EDGE, weight: 2, fillColor: '#fff', fillOpacity: 1 })
@@ -253,34 +325,164 @@ function showRows(name, rows, allTrs){
           [t.name, d.community, d.kva ? d.kva + ' kVA' : '', words(d.status), words(d.condition), fmt(t.n), code]) + '</div>', { maxWidth: 360 })
       .addTo(sites);
   });
-  if (!points.getLayers().length) throw new Error('No rows with a location were found in this file.');
-  map.fitBounds(points.getBounds(), { padding: [24, 24] });
-  $('fdfile').textContent = name;
-  $('fdcount').textContent = fmt(points.getLayers().length) + (skipped ? ' (' + fmt(skipped) + ' rows without a location left out)' : '');
+  const nHidden = HH.length - vis.length, nMoved = vis.filter(h => h.moved).length;
+  $('fdcount').textContent = fmt(vis.length) + (nHidden ? ' (' + fmt(nHidden) + ' hidden)' : '') +
+    (skippedRows ? ' (' + fmt(skippedRows) + ' rows without a location left out)' : '');
   $('fdkey').innerHTML = '<span><i style="background:' + BLUE + '"></i>household</span>' +
-    (sites.getLayers().length - empty ? '<span><i style="background:' + YELLOW + ';box-shadow:0 0 0 1px ' + EDGE + '"></i>transformer ' + fmt(sites.getLayers().length - empty) + '</span>' : '') +
+    (nMoved ? '<span><i style="background:' + MOVED + '"></i>moved ' + fmt(nMoved) + '</span>' : '') +
+    (drawn - empty ? '<span><i style="background:' + YELLOW + ';box-shadow:0 0 0 1px ' + EDGE + '"></i>transformer ' + fmt(drawn - empty) + '</span>' : '') +
     (empty ? '<span><i style="background:#fff;box-shadow:0 0 0 2px ' + EDGE + '"></i>no households ' + fmt(empty) + '</span>' : '') +
     Object.keys(counts).map(k => '<span>' + k + ' ' + fmt(counts[k]) + '</span>').join('');
-  $('fddrop').hidden = true;
-  $('fdopen').hidden = false;
-  shown = { name: name, head: head, rows: kept, trs: trs, tc: tc };
-  dlBtn.hidden = view.hidden;
+  updateBar();
 }
 
+/* ---- tools: pan / select / box select / move ---- */
+const tools = $('fdtools');
+let tool = 'pan', drag = null, box = null;
+const HINTS = {
+  pan: '',
+  select: 'Click households to select or unselect them.',
+  box: 'Drag a box on the map to select every household inside it.',
+  move: 'Drag a household to a new place. Drag a selected one to move the whole selection.'
+};
+function setTool(t){
+  tool = t;
+  tools.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.tool === t)));
+  wrap.classList.remove('fd-select', 'fd-box', 'fd-move');
+  if (t !== 'pan') wrap.classList.add('fd-' + t);
+  if (map){
+    if (t === 'box' || t === 'move') map.dragging.disable(); else map.dragging.enable();
+    map.closePopup();
+  }
+  updateBar();
+}
+tools.querySelectorAll('button').forEach(b => { b.onclick = () => setTool(b.dataset.tool); });
+
+const selected = () => HH.filter(h => h.selected && !h.hidden);
+function setSelected(h, on){ if (h.selected !== on){ h.selected = on; h.marker.setStyle(hhStyle(h)); if (on) h.marker.bringToFront(); } }
+function updateBar(){
+  const nSel = selected().length, nHid = HH.filter(h => h.hidden).length, nMov = HH.filter(h => h.moved && !h.hidden).length;
+  $('fdhint').textContent = HINTS[tool]; $('fdhint').hidden = !HINTS[tool];
+  $('fdsel').hidden = !nSel; $('fdseln').textContent = fmt(nSel);
+  $('fdhid').hidden = !nHid; $('fdhidn').textContent = fmt(nHid);
+  $('fdmov').hidden = !nMov; $('fdmovn').textContent = fmt(nMov);
+  $('fdbar').hidden = !(HINTS[tool] || nSel || nHid || nMov);
+}
+
+function onHouseholdClick(h, e){
+  L.DomEvent.stop(e);
+  if (tool === 'select') { setSelected(h, !h.selected); updateBar(); return; }
+  if (tool !== 'pan') return;
+  L.popup({ maxWidth: 300 }).setLatLng([h.lat, h.lng]).setContent(() => popupFor(h)).openOn(map);
+}
+function popupFor(h){
+  const d = document.createElement('div');
+  d.innerHTML = householdPopup(head, h.r);
+  if (h.moved){
+    const far = metres(h.lat0, h.lng0, h.lat, h.lng);
+    const p = document.createElement('div'); p.className = 'hhmoved';
+    p.innerHTML = 'Moved on this map, ' + esc(distText(far)) + ' from its LECMS location (' +
+      h.lat0.toFixed(5) + ', ' + h.lng0.toFixed(5) + '). <button type="button" class="fdact ghostish">Put back</button>';
+    p.querySelector('button').onclick = () => { map.closePopup(); putBack([h]); };
+    d.querySelector('.hhpop').insertBefore(p, d.querySelector('.feederpop'));
+  }
+  const b = document.createElement('button'); b.type = 'button'; b.className = 'fdact ghostish hhhide'; b.textContent = 'Hide this household';
+  b.onclick = () => { map.closePopup(); hide([h]); };
+  d.querySelector('.hhpop').appendChild(b);
+  return d;
+}
+
+function hide(list){
+  list.forEach(h => { h.hidden = true; h.selected = false; h.marker.setStyle(hhStyle(h)); points.removeLayer(h.marker); });
+  saveEdits(); refresh();
+}
+function putBack(list){
+  list.forEach(h => { h.lat = h.lat0; h.lng = h.lng0; h.moved = false; h.r = h.r0; h.marker.setLatLng([h.lat, h.lng]); h.marker.setStyle(hhStyle(h)); });
+  saveEdits(); refresh();
+}
+$('fdhide').onclick = () => hide(selected());
+$('fdclear').onclick = () => { HH.forEach(h => setSelected(h, false)); updateBar(); };
+$('fdunhide').onclick = () => {
+  HH.forEach(h => { if (h.hidden){ h.hidden = false; h.marker.setStyle(hhStyle(h)); h.marker.addTo(points); } });
+  saveEdits(); refresh();
+};
+$('fdunmove').onclick = () => putBack(HH.filter(h => h.moved));
+document.addEventListener('keydown', e => {
+  if (view.hidden || /^(INPUT|TEXTAREA|SELECT)$/.test((e.target || {}).tagName || '')) return;
+  if ((e.key === 'Delete' || e.key === 'Backspace') && selected().length) { e.preventDefault(); hide(selected()); }
+  else if (e.key === 'Escape') { if (selected().length) { HH.forEach(h => setSelected(h, false)); updateBar(); } else setTool('pan'); }
+});
+
+/* move: drag one household, or every selected one when the dragged one is selected */
+function onHouseholdDown(h, e){
+  if (tool !== 'move' || !e.originalEvent || e.originalEvent.button !== 0) return;
+  L.DomEvent.stop(e);
+  const group = h.selected ? selected() : [h];
+  drag = { start: e.latlng, group: group.map(x => ({ h: x, lat: x.lat, lng: x.lng })), movedAny: false };
+  map.on('mousemove', onDragMove);
+  document.addEventListener('mouseup', onDragEnd, { once: true });
+}
+function onDragMove(e){
+  if (!drag) return;
+  const dLat = e.latlng.lat - drag.start.lat, dLng = e.latlng.lng - drag.start.lng;
+  drag.movedAny = true;
+  drag.group.forEach(g => g.h.marker.setLatLng([g.lat + dLat, g.lng + dLng]));
+}
+function onDragEnd(e){
+  map.off('mousemove', onDragMove);
+  if (!drag) return;
+  if (e && e.clientX !== undefined) onDragMove({ latlng: map.mouseEventToLatLng(e) });   /* land exactly where the mouse let go */
+  const d = drag; drag = null;
+  if (!d.movedAny) return;
+  d.group.forEach(g => {
+    const ll = g.h.marker.getLatLng();
+    g.h.lat = ll.lat; g.h.lng = ll.lng;
+    g.h.moved = Math.abs(g.h.lat - g.h.lat0) > 1e-9 || Math.abs(g.h.lng - g.h.lng0) > 1e-9;
+    g.h.r = g.h.moved ? movedRow(g.h) : g.h.r0;
+    g.h.marker.setStyle(hhStyle(g.h));
+  });
+  saveEdits(); refresh();
+}
+
+/* box select: drag a rectangle; every visible household inside is added to the selection */
+function boxDown(e){
+  if (tool !== 'box' || !map || e.button !== 0) return;
+  e.preventDefault();
+  const a = map.mouseEventToLatLng(e);
+  box = { a: a, rect: L.rectangle([a, a], { color: SEL, weight: 1.5, dashArray: '4 3', fillOpacity: 0.08, interactive: false }).addTo(map) };
+  document.addEventListener('mousemove', boxMove);
+  document.addEventListener('mouseup', boxUp, { once: true });
+}
+function boxMove(e){ if (box) box.rect.setBounds([box.a, map.mouseEventToLatLng(e)]); }
+function boxUp(e){
+  document.removeEventListener('mousemove', boxMove);
+  if (!box) return;
+  const b = L.latLngBounds(box.a, map.mouseEventToLatLng(e));
+  map.removeLayer(box.rect); box = null;
+  HH.forEach(h => { if (!h.hidden && b.contains([h.lat, h.lng])) setSelected(h, true); });
+  updateBar();
+}
+$('feedermap').addEventListener('mousedown', boxDown, true);
+
 /* ---- download ----
-   One CSV with every transformer on the map and every household, told
-   apart by record_type. Transformer rows carry the site's own location in
-   lat / lng and how many households in the file it feeds; household rows
-   are the opened file's rows as they were, plus that same count. */
+   One CSV with every transformer on the map and every household still on
+   it, told apart by record_type. Hidden households are left out. Moved
+   households carry their new lat / lng, with distances and mobile coverage
+   worked out again there, and their LECMS position in moved_from_lat /
+   moved_from_lng.
+   Transformer rows carry the site's own location in lat / lng and how many
+   of the downloaded households it feeds. */
 const csvCell = v => /[",\n\r]/.test(v) ? '"' + String(v).replace(/"/g, '""') + '"' : v;
 dlBtn.onclick = () => {
   if (!shown) return;
-  const { head, rows, trs, tc } = shown;
-  const col = n => head.indexOf(n);
-  const out = [['record_type'].concat(head, 'households_on_transformer')];
+  const col = n => head.indexOf(n), tc = colTc;
+  const vis = HH.filter(h => !h.hidden), anyMoved = vis.some(h => h.moved);
+  const extra = anyMoved ? ['moved_from_lat', 'moved_from_lng'] : [];
+  const out = [['record_type'].concat(head, 'households_on_transformer', extra)];
+  const rowOf = h => head.map((x, k) => h.r[k] || '');
   const first = new Map();             /* a household on each transformer, for its feeder columns */
-  rows.forEach(r => { if (tc !== -1 && !first.has(r[tc])) first.set(r[tc], r); });
-  trs.forEach((t, code) => {
+  HH.forEach(h => { if (tc !== -1 && !first.has(h.r0[tc])) first.set(h.r0[tc], h.r0); });
+  TRS.forEach((t, code) => {
     const row = head.map(() => '');
     /* a transformer with no households has no row to copy from: build one */
     const src = first.get(code) || head.map(h => ({ transformer_code: code, transformer_name: t.name,
@@ -288,11 +490,12 @@ dlBtn.onclick = () => {
       feeder_no: (FEEDER.match(/(\d+)$/) || ['', ''])[1], feeder: FEEDER })[h] || '');
     ['transformer_code', 'transformer_name', 'transformer_lat', 'transformer_lng', 'feeder_no', 'feeder']
       .forEach(n => { if (col(n) !== -1) row[col(n)] = src[col(n)]; });
-    row[col('lat')] = src[col('transformer_lat')];
-    row[col('lng') !== -1 ? col('lng') : col('lon')] = src[col('transformer_lng')];
-    out.push(['transformer'].concat(row, t.n));
+    row[colLa] = src[col('transformer_lat')];
+    row[colLn] = src[col('transformer_lng')];
+    out.push(['transformer'].concat(row, t.n, extra.map(() => '')));
   });
-  rows.forEach(r => out.push(['household'].concat(head.map((h, k) => r[k] || ''), tc !== -1 && trs.has(r[tc]) ? trs.get(r[tc]).n : '')));
+  vis.forEach(h => out.push(['household'].concat(rowOf(h), tc !== -1 && TRS.has(h.r[tc]) ? TRS.get(h.r[tc]).n : '',
+    anyMoved ? (h.moved ? [h.lat0.toFixed(7), h.lng0.toFixed(7)] : ['', '']) : [])));
   saveCSV(out.map(r => r.map(csvCell).join(',')).join('\n') + '\n', 'feeder01_transformers_and_households.csv');
 };
 
@@ -336,7 +539,6 @@ view.querySelectorAll('input[type=file]').forEach(inp => {
   inp.onchange = () => { open(inp.files[0]); inp.value = ''; };
 });
 /* a file can also be dropped anywhere on the map */
-const wrap = view.querySelector('.mapwrap');
 wrap.addEventListener('dragover', e => { e.preventDefault(); });
 wrap.addEventListener('drop', e => { e.preventDefault(); open(e.dataTransfer.files[0]); });
 })();
