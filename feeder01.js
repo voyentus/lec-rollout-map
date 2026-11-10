@@ -101,7 +101,7 @@ function loadFeeder(){
   fetching = true;
   dropState('Loading the Feeder 01 households…', '');
   feederRows()
-    .then(rows => { if (!shown) showRows(FEEDER_NAME, rows); })
+    .then(rows => { if (!shown) showRows(FEEDER_NAME, rows, trList.filter(t => t.feeder === FEEDER)); })
     .catch(e => dropState('', 'Could not load the Feeder 01 households. ' + (e.message || e) + ' You can open a CSV from this computer instead.'))
     .finally(() => { fetching = false; });
 }
@@ -174,7 +174,9 @@ const popTable = (head, r) => '<table class="feederpop">' +
   head.map((h, k) => r[k] ? '<tr><th>' + esc(h) + '</th><td>' + esc(r[k]) + '</td></tr>' : '').join('') + '</table>';
 
 function show(name, text){ showRows(name, parseCSV(text)); }
-function showRows(name, rows){
+/* allTrs: for the database view, every transformer on the feeder, so the
+   ones with no households on this map are drawn too (hollow, 0 households) */
+function showRows(name, rows, allTrs){
   rows = rows.slice();
   const head = (rows.shift() || []).map(h => h.trim().toLowerCase());
   const la = head.indexOf('lat'), ln = head.indexOf('lng') !== -1 ? head.indexOf('lng') : head.indexOf('lon');
@@ -200,11 +202,19 @@ function showRows(name, rows){
       .bindPopup(() => popTable(head, r), { maxWidth: 360 })
       .addTo(points);
   });
+  const info = new Map((allTrs || []).map(t => [t.code, t]));
+  info.forEach((t, code) => { if (!trs.has(code)) trs.set(code, { lat: t.lat, lng: t.lng, name: t.name || '', n: 0 }); });
+  let empty = 0;
   trs.forEach((t, code) => {
     if (!isFinite(t.lat) || !isFinite(t.lng)) return;
-    L.circleMarker([t.lat, t.lng], { radius: 7, color: EDGE, weight: 1.5, fillColor: YELLOW, fillOpacity: 1 })
+    const d = info.get(code) || {};
+    if (!t.n) empty++;
+    L.circleMarker([t.lat, t.lng], t.n
+      ? { radius: 7, color: EDGE, weight: 1.5, fillColor: YELLOW, fillOpacity: 1 }
+      : { radius: 6, color: EDGE, weight: 2, fillColor: '#fff', fillOpacity: 1 })
       .bindTooltip((code.match(/TRN\d+$/) || [code])[0], { direction: 'top', offset: [0, -6] })
-      .bindPopup(popTable(['transformer_code', 'transformer_name', 'households in this file'], [code, t.name, fmt(t.n)]), { maxWidth: 360 })
+      .bindPopup(popTable(['transformer_code', 'transformer_name', 'community', 'kVA', 'status', 'condition', 'households on this map'],
+        [code, t.name, d.community, d.kva ? String(d.kva) : '', d.status, d.condition, fmt(t.n)]), { maxWidth: 360 })
       .addTo(sites);
   });
   if (!points.getLayers().length) throw new Error('No rows with a location were found in this file.');
@@ -212,7 +222,8 @@ function showRows(name, rows){
   $('fdfile').textContent = name;
   $('fdcount').textContent = fmt(points.getLayers().length) + (skipped ? ' (' + fmt(skipped) + ' rows without a location left out)' : '');
   $('fdkey').innerHTML = '<span><i style="background:' + BLUE + '"></i>household</span>' +
-    (sites.getLayers().length ? '<span><i style="background:' + YELLOW + ';box-shadow:0 0 0 1px ' + EDGE + '"></i>transformer ' + fmt(sites.getLayers().length) + '</span>' : '') +
+    (sites.getLayers().length - empty ? '<span><i style="background:' + YELLOW + ';box-shadow:0 0 0 1px ' + EDGE + '"></i>transformer ' + fmt(sites.getLayers().length - empty) + '</span>' : '') +
+    (empty ? '<span><i style="background:#fff;box-shadow:0 0 0 2px ' + EDGE + '"></i>no households ' + fmt(empty) + '</span>' : '') +
     Object.keys(counts).map(k => '<span>' + k + ' ' + fmt(counts[k]) + '</span>').join('');
   $('fddrop').hidden = true;
   $('fdopen').hidden = false;
@@ -234,7 +245,11 @@ dlBtn.onclick = () => {
   const first = new Map();             /* a household on each transformer, for its feeder columns */
   rows.forEach(r => { if (tc !== -1 && !first.has(r[tc])) first.set(r[tc], r); });
   trs.forEach((t, code) => {
-    const src = first.get(code), row = head.map(() => '');
+    const row = head.map(() => '');
+    /* a transformer with no households has no row to copy from: build one */
+    const src = first.get(code) || head.map(h => ({ transformer_code: code, transformer_name: t.name,
+      transformer_lat: String(t.lat), transformer_lng: String(t.lng),
+      feeder_no: (FEEDER.match(/(\d+)$/) || ['', ''])[1], feeder: FEEDER })[h] || '');
     ['transformer_code', 'transformer_name', 'transformer_lat', 'transformer_lng', 'feeder_no', 'feeder']
       .forEach(n => { if (col(n) !== -1) row[col(n)] = src[col(n)]; });
     row[col('lat')] = src[col('transformer_lat')];
