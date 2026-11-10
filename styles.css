@@ -320,3 +320,9 @@ canvas.meter-canvas{position:absolute;left:0;top:0;pointer-events:none}
 .maptoggle[aria-checked="true"] .track i{left:13px}
 .maptoggle.fddl{padding:0 11px 0 9px;gap:6px}
 .maptoggle.fddl[hidden]{display:none}
+/* Feeder 01 popups in plain words */
+.hhpop{min-width:220px}
+.hhpop .hhtitle{font-weight:600;font-size:13px;color:var(--ink);margin-bottom:6px}
+.hhpop .feederpop td{font-family:inherit;word-break:normal}
+.hhpop .gwcov{margin-top:8px;border-bottom:0;padding-bottom:0}
+.hhpop .hhcovnote{margin-top:6px;font-size:10.5px;line-height:1.35;color:var(--ink-3)}

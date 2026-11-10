@@ -154,6 +154,60 @@ const STATUS = { existing_meter: 'existing meter', no_meter: 'not yet metered' }
 const popTable = (head, r) => '<table class="feederpop">' +
   head.map((h, k) => r[k] ? '<tr><th>' + esc(h) + '</th><td>' + esc(r[k]) + '</td></tr>' : '').join('') + '</table>';
 
+/* ---- household popup in plain words ----
+   The export's columns, said the way a person would: the meter status as
+   words, distances in m or km, and the six 0/1 coverage columns as one
+   small table per operator (same look as the gateway popup on the main
+   map). Columns it does not know are still shown, with tidied names. */
+const COV_OPS = [
+  ['Orange', 'orange', ['#F7C393', '#E9761C', '#A93A05']],
+  ['Lonestar Cell MTN', 'lonestar', ['#9FD0E0', '#2A8DA8', '#08475A']]
+];
+const COV_TECH = [['gsm', '2G', 'GSM, calls and SMS'], ['3g', '3G', 'UMTS data'], ['lte', '4G', 'LTE data']];
+const HH_KNOWN = new Set(['household_id', 'sp_id', 'lat', 'lng', 'lon', 'transformer_code', 'transformer_name',
+  'transformer_lat', 'transformer_lng', 'feeder_no', 'feeder', 'status', 'installed_at', 'record_type',
+  'dist_to_own_transformer_m', 'dist_to_nearest_feeder_transformer_m']);
+COV_OPS.forEach(o => COV_TECH.forEach(t => HH_KNOWN.add(o[1] + '_' + t[0])));
+const yes = v => /^(1|true|yes|y)$/i.test(String(v || '').trim());
+const distText = v => { const m = parseFloat(v); return !isFinite(m) ? '' : m < 1000 ? fmt(m) + ' m' : (m / 1000).toFixed(1) + ' km'; };
+const tidy = h => { const s = String(h).replace(/_/g, ' ').trim(); return s.charAt(0).toUpperCase() + s.slice(1); };
+const words = s => s ? tidy(String(s).toLowerCase()) : '';
+function householdPopup(head, r){
+  const v = name => { const k = head.indexOf(name); return k === -1 ? '' : (r[k] || '').trim(); };
+  const rows = [];
+  const add = (label, value) => { if (value) rows.push('<tr><th>' + esc(label) + '</th><td>' + esc(value) + '</td></tr>'); };
+  const trn = v('transformer_code'), short = (trn.match(/TRN\d+$/) || [trn])[0];
+  add('Meter', STATUS[v('status')] ? tidy(STATUS[v('status')]) : v('status'));
+  add('Supply point', v('sp_id'));
+  add('Transformer', [short, v('transformer_name')].filter(Boolean).join(' · '));
+  add('Distance to its transformer', distText(v('dist_to_own_transformer_m')));
+  add('Nearest Feeder ' + (v('feeder_no') || '01') + ' transformer', distText(v('dist_to_nearest_feeder_transformer_m')));
+  add('Feeder', v('feeder_no') ? v('feeder_no') + (v('feeder') ? ' (' + v('feeder') + ')' : '') : v('feeder'));
+  add('Installed', v('installed_at') ? v('installed_at').slice(0, 10) : '');
+  const lat = parseFloat(v('lat')), lng = parseFloat(v('lng') || v('lon'));
+  add('Location', isFinite(lat) && isFinite(lng) ? lat.toFixed(5) + ', ' + lng.toFixed(5) : '');
+  head.forEach((h, k) => { if (!HH_KNOWN.has(h)) add(tidy(h), (r[k] || '').trim()); });
+
+  let cov = '';
+  if (COV_OPS.some(o => COV_TECH.some(t => head.indexOf(o[1] + '_' + t[0]) !== -1))){
+    const items = COV_OPS.map(([name, key, colours]) => {
+      const techs = COV_TECH.map(([t, label, note], i) => {
+        const hit = yes(v(key + '_' + t));
+        return '<i' + (hit ? ' style="background:' + colours[i] + ';border-color:' + colours[i] + (i === 0 ? ';color:#0E1719' : '') + '"' : ' class="no"') +
+          ' title="' + label + ' (' + note + ') ' + (hit ? 'covered' : 'not covered') + '">' + label + '</i>';
+      });
+      const any = COV_TECH.some(([t]) => yes(v(key + '_' + t)));
+      return '<li' + (any ? '' : ' class="no"') + '><span class="op">' + name + '</span><span class="techs">' + techs.join('') + '</span></li>';
+    }).join('');
+    const no3g = !COV_OPS.some(o => yes(v(o[1] + '_3g')));
+    cov = '<div class="gwcov hhcov"><h4>Mobile coverage here</h4>' +
+      (no3g ? '<p>No 3G from either operator.</p>' : '') + '<ul>' + items + '</ul>' +
+      '<div class="hhcovnote">Filled: covered. Crossed out: not covered. From the operators\' 2017–18 coverage maps, not a signal test.</div></div>';
+  }
+  return '<div class="hhpop"><div class="hhtitle">Household ' + esc(v('household_id') || '') + '</div>' +
+    '<table class="feederpop">' + rows.join('') + '</table>' + cov + '</div>';
+}
+
 function show(name, text){ showRows(name, parseCSV(text)); }
 /* allTrs: for the database view, every transformer on the feeder, so the
    ones with no households on this map are drawn too (hollow, 0 households) */
@@ -180,7 +234,7 @@ function showRows(name, rows, allTrs){
       t.n++; trs.set(r[tc], t);
     }
     L.circleMarker([lat, lng], { radius: 3, color: '#fff', weight: 0.6, opacity: 0.8, fillColor: BLUE, fillOpacity: 0.9 })
-      .bindPopup(() => popTable(head, r), { maxWidth: 360 })
+      .bindPopup(() => householdPopup(head, r), { maxWidth: 300 })
       .addTo(points);
   });
   const info = new Map((allTrs || []).map(t => [t.code, t]));
@@ -194,8 +248,9 @@ function showRows(name, rows, allTrs){
       ? { radius: 7, color: EDGE, weight: 1.5, fillColor: YELLOW, fillOpacity: 1 }
       : { radius: 6, color: EDGE, weight: 2, fillColor: '#fff', fillOpacity: 1 })
       .bindTooltip((code.match(/TRN\d+$/) || [code])[0], { direction: 'top', offset: [0, -6] })
-      .bindPopup(popTable(['transformer_code', 'transformer_name', 'community', 'kVA', 'status', 'condition', 'households on this map'],
-        [code, t.name, d.community, d.kva ? String(d.kva) : '', d.status, d.condition, fmt(t.n)]), { maxWidth: 360 })
+      .bindPopup('<div class="hhpop"><div class="hhtitle">Transformer ' + esc((code.match(/TRN\d+$/) || [code])[0]) + '</div>' +
+        popTable(['Name', 'Community', 'Size', 'Status', 'Condition', 'Households on this map', 'Code'],
+          [t.name, d.community, d.kva ? d.kva + ' kVA' : '', words(d.status), words(d.condition), fmt(t.n), code]) + '</div>', { maxWidth: 360 })
       .addTo(sites);
   });
   if (!points.getLayers().length) throw new Error('No rows with a location were found in this file.');
